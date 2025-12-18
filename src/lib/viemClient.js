@@ -57,15 +57,40 @@ export function getPublicClient(key) {
  * @returns {import('viem').WalletClient}
  */
 export function getWalletClient(key = NETWORK) {
-  // Read private key at runtime to ensure we get the current .env value
-  // DO NOT CACHE - always get fresh key from environment
-  const privateKey =
-    process.env.BACKEND_WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
+  const netKey = String(key || "").toUpperCase();
 
-  if (!privateKey) {
-    throw new Error(
-      "Backend wallet private key not configured. Set BACKEND_WALLET_PRIVATE_KEY or PRIVATE_KEY in .env"
-    );
+  // IMPORTANT:
+  // - For TESTNET/MAINNET we require explicit network-specific private keys.
+  // - For LOCAL we allow the generic keys.
+  // Reason: prevents accidentally using a local/mainnet key on a different network.
+  let privateKey;
+
+  if (netKey === "TESTNET") {
+    privateKey =
+      process.env.BACKEND_WALLET_PRIVATE_KEY_TESTNET ||
+      process.env.PRIVATE_KEY_TESTNET;
+    if (!privateKey) {
+      throw new Error(
+        "Backend wallet private key not configured for TESTNET. Set BACKEND_WALLET_PRIVATE_KEY_TESTNET or PRIVATE_KEY_TESTNET in environment."
+      );
+    }
+  } else if (netKey === "MAINNET") {
+    privateKey =
+      process.env.BACKEND_WALLET_PRIVATE_KEY_MAINNET ||
+      process.env.PRIVATE_KEY_MAINNET;
+    if (!privateKey) {
+      throw new Error(
+        "Backend wallet private key not configured for MAINNET. Set BACKEND_WALLET_PRIVATE_KEY_MAINNET or PRIVATE_KEY_MAINNET in environment."
+      );
+    }
+  } else {
+    privateKey =
+      process.env.BACKEND_WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
+    if (!privateKey) {
+      throw new Error(
+        "Backend wallet private key not configured for LOCAL. Set BACKEND_WALLET_PRIVATE_KEY or PRIVATE_KEY in environment."
+      );
+    }
   }
 
   const chain = getChainByKey(key);
