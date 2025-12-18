@@ -66,29 +66,24 @@ export function getWalletClient(key = NETWORK) {
   let privateKey;
 
   if (netKey === "TESTNET") {
-    privateKey =
-      process.env.BACKEND_WALLET_PRIVATE_KEY_TESTNET ||
-      process.env.PRIVATE_KEY_TESTNET;
+    privateKey = process.env.PRIVATE_KEY_TESTNET;
     if (!privateKey) {
       throw new Error(
-        "Backend wallet private key not configured for TESTNET. Set BACKEND_WALLET_PRIVATE_KEY_TESTNET or PRIVATE_KEY_TESTNET in environment."
+        "Backend wallet private key not configured for TESTNET. Set PRIVATE_KEY_TESTNET in environment."
       );
     }
   } else if (netKey === "MAINNET") {
-    privateKey =
-      process.env.BACKEND_WALLET_PRIVATE_KEY_MAINNET ||
-      process.env.PRIVATE_KEY_MAINNET;
+    privateKey = process.env.PRIVATE_KEY_MAINNET;
     if (!privateKey) {
       throw new Error(
-        "Backend wallet private key not configured for MAINNET. Set BACKEND_WALLET_PRIVATE_KEY_MAINNET or PRIVATE_KEY_MAINNET in environment."
+        "Backend wallet private key not configured for MAINNET. Set PRIVATE_KEY_MAINNET in environment."
       );
     }
   } else {
-    privateKey =
-      process.env.BACKEND_WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
+    privateKey = process.env.PRIVATE_KEY;
     if (!privateKey) {
       throw new Error(
-        "Backend wallet private key not configured for LOCAL. Set BACKEND_WALLET_PRIVATE_KEY or PRIVATE_KEY in environment."
+        "Backend wallet private key not configured for LOCAL. Set PRIVATE_KEY in environment."
       );
     }
   }

@@ -197,12 +197,17 @@ class OracleCallService {
         `❌ WRONG ACCOUNT! Expected ${expectedAddress}, got ${accountAddress}`
       );
       logger?.error(
-        `❌ PRIVATE_KEY env var: ${
-          process.env.BACKEND_WALLET_PRIVATE_KEY ? "SET" : "NOT SET"
+        `❌ PRIVATE_KEY env var: ${process.env.PRIVATE_KEY ? "SET" : "NOT SET"}`
+      );
+      logger?.error(
+        `❌ PRIVATE_KEY_TESTNET env var: ${
+          process.env.PRIVATE_KEY_TESTNET ? "SET" : "NOT SET"
         }`
       );
       logger?.error(
-        `❌ PRIVATE_KEY env var: ${process.env.PRIVATE_KEY ? "SET" : "NOT SET"}`
+        `❌ PRIVATE_KEY_MAINNET env var: ${
+          process.env.PRIVATE_KEY_MAINNET ? "SET" : "NOT SET"
+        }`
       );
     }
 

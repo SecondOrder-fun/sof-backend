@@ -33,7 +33,8 @@ export class PaymasterService {
       const {
         DEFAULT_NETWORK,
         PAYMASTER_RPC_URL_TESTNET,
-        BACKEND_WALLET_PRIVATE_KEY,
+        PRIVATE_KEY_TESTNET,
+        PRIVATE_KEY_MAINNET,
       } = process.env;
 
       const isTestnet = DEFAULT_NETWORK === "TESTNET";
@@ -43,14 +44,19 @@ export class PaymasterService {
         throw new Error("PAYMASTER_RPC_URL_TESTNET not configured");
       }
 
-      if (!BACKEND_WALLET_PRIVATE_KEY) {
-        throw new Error("BACKEND_WALLET_PRIVATE_KEY not configured");
+      const requiredKey = isTestnet ? PRIVATE_KEY_TESTNET : PRIVATE_KEY_MAINNET;
+      if (!requiredKey) {
+        throw new Error(
+          isTestnet
+            ? "PRIVATE_KEY_TESTNET not configured"
+            : "PRIVATE_KEY_MAINNET not configured"
+        );
       }
 
       // Create account from private key
-      const normalizedKey = BACKEND_WALLET_PRIVATE_KEY.startsWith("0x")
-        ? BACKEND_WALLET_PRIVATE_KEY
-        : `0x${BACKEND_WALLET_PRIVATE_KEY}`;
+      const normalizedKey = requiredKey.startsWith("0x")
+        ? requiredKey
+        : `0x${requiredKey}`;
 
       this.account = privateKeyToAccount(normalizedKey);
 
