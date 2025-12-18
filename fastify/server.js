@@ -51,7 +51,7 @@ if (corsOriginsEnv && corsOriginsEnv.trim().length > 0) {
 } else {
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "CORS_ORIGINS is required in production. Set a comma-separated allowlist of origins."
+      "CORS_ORIGIN is required in production. Set a comma-separated allowlist of origins."
     );
   }
 
