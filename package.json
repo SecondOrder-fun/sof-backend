@@ -8,6 +8,7 @@
     "dev": "node -r dotenv/config fastify/server.js",
     "dev:local": "node scripts/start-backend-with-redis.js",
     "start": "node -r dotenv/config fastify/server.js",
+    "start:backend": "node -r dotenv/config fastify/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
