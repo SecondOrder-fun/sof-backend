@@ -96,6 +96,20 @@ try {
 }
 
 try {
+  await app.register(
+    (
+      await import("./routes/farcasterWebhookRoutes.js")
+    ).default,
+    {
+      prefix: "/api",
+    }
+  );
+  app.log.info("Mounted /api/webhook/farcaster");
+} catch (err) {
+  app.log.error({ err }, "Failed to mount /api/webhook/farcaster");
+}
+
+try {
   await app.register((await import("./routes/usernameRoutes.js")).default, {
     prefix: "/api/usernames",
   });
