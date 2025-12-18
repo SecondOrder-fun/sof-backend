@@ -49,10 +49,13 @@ if (corsOriginsEnv && corsOriginsEnv.trim().length > 0) {
     })
     .filter(Boolean);
 } else {
-  corsOrigin =
-    process.env.NODE_ENV === "production"
-      ? ["https://secondorder.fun", "https://www.secondorder.fun"]
-      : true; // Allow all origins in development
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "CORS_ORIGINS is required in production. Set a comma-separated allowlist of origins."
+    );
+  }
+
+  corsOrigin = true;
 }
 
 await app.register(cors, {
