@@ -28,14 +28,18 @@ function decodeBase64Url(str) {
 }
 
 /**
- * Upsert notification token for a user/client pair
+ * Upsert notification token for a user
  * @param {object} fastify - Fastify instance for logging
  * @param {number} fid - User's Farcaster ID
- * @param {number} appFid - Client app FID
  * @param {string} url - Notification URL
- * @param {string} token - Notification token
+ * @param {string} token - Notification token (unique per client/app/user)
  */
-async function upsertNotificationToken(fastify, fid, appFid, url, token) {
+async function upsertNotificationToken(fastify, fid, url, token) {
+  fastify.log.info(
+    { fid, url: url?.substring(0, 50), hasToken: !!token, hasSupabase },
+    "[Farcaster Webhook] Attempting to upsert token"
+  );
+
   if (!hasSupabase) {
     fastify.log.warn(
       "[Farcaster Webhook] Supabase not configured, skipping token storage"
@@ -43,42 +47,40 @@ async function upsertNotificationToken(fastify, fid, appFid, url, token) {
     return;
   }
 
-  const { error } = await db.client
+  const { data, error } = await db.client
     .from("farcaster_notification_tokens")
     .upsert(
       {
         fid,
-        app_fid: appFid,
         notification_url: url,
         notification_token: token,
         notifications_enabled: true,
         updated_at: new Date().toISOString(),
       },
       {
-        onConflict: "fid,app_fid",
+        onConflict: "notification_token",
       }
     );
 
   if (error) {
     fastify.log.error(
-      { error: error.message, fid, appFid },
+      { error: error.message, errorCode: error.code, fid },
       "[Farcaster Webhook] Failed to upsert notification token"
     );
   } else {
     fastify.log.info(
-      { fid, appFid },
+      { fid, data },
       "[Farcaster Webhook] Notification token stored"
     );
   }
 }
 
 /**
- * Disable notifications for a user/client pair
+ * Disable notifications for a user
  * @param {object} fastify - Fastify instance for logging
  * @param {number} fid - User's Farcaster ID
- * @param {number} appFid - Client app FID
  */
-async function disableNotifications(fastify, fid, appFid) {
+async function disableNotifications(fastify, fid) {
   if (!hasSupabase) {
     fastify.log.warn(
       "[Farcaster Webhook] Supabase not configured, skipping notification disable"
@@ -92,29 +94,24 @@ async function disableNotifications(fastify, fid, appFid) {
       notifications_enabled: false,
       updated_at: new Date().toISOString(),
     })
-    .eq("fid", fid)
-    .eq("app_fid", appFid);
+    .eq("fid", fid);
 
   if (error) {
     fastify.log.error(
-      { error: error.message, fid, appFid },
+      { error: error.message, fid },
       "[Farcaster Webhook] Failed to disable notifications"
     );
   } else {
-    fastify.log.info(
-      { fid, appFid },
-      "[Farcaster Webhook] Notifications disabled"
-    );
+    fastify.log.info({ fid }, "[Farcaster Webhook] Notifications disabled");
   }
 }
 
 /**
- * Delete notification token for a user/client pair (when app is removed)
+ * Delete notification tokens for a user (when app is removed)
  * @param {object} fastify - Fastify instance for logging
  * @param {number} fid - User's Farcaster ID
- * @param {number} appFid - Client app FID
  */
-async function deleteNotificationToken(fastify, fid, appFid) {
+async function deleteNotificationToken(fastify, fid) {
   if (!hasSupabase) {
     fastify.log.warn(
       "[Farcaster Webhook] Supabase not configured, skipping token deletion"
@@ -125,19 +122,15 @@ async function deleteNotificationToken(fastify, fid, appFid) {
   const { error } = await db.client
     .from("farcaster_notification_tokens")
     .delete()
-    .eq("fid", fid)
-    .eq("app_fid", appFid);
+    .eq("fid", fid);
 
   if (error) {
     fastify.log.error(
-      { error: error.message, fid, appFid },
+      { error: error.message, fid },
       "[Farcaster Webhook] Failed to delete notification token"
     );
   } else {
-    fastify.log.info(
-      { fid, appFid },
-      "[Farcaster Webhook] Notification token deleted"
-    );
+    fastify.log.info({ fid }, "[Farcaster Webhook] Notification token deleted");
   }
 }
 
@@ -156,7 +149,7 @@ async function farcasterWebhookRoutes(fastify) {
     fastify.log.info({ raw: body }, "[Farcaster Webhook] Received");
 
     try {
-      let event, fid, appFid, notificationDetails;
+      let event, fid, notificationDetails;
 
       // Check if this is a signed payload (has header + payload fields)
       if (body.header && body.payload) {
@@ -171,19 +164,17 @@ async function farcasterWebhookRoutes(fastify) {
         );
 
         fid = headerData.fid;
-        appFid = headerData.appFid || payloadData.appFid;
         event = payloadData.event;
         notificationDetails = payloadData.notificationDetails;
       } else {
         // Direct format (for testing or legacy)
         event = body.event;
         fid = body.fid;
-        appFid = body.appFid;
         notificationDetails = body.notificationDetails;
       }
 
       fastify.log.info(
-        { event, fid, appFid, hasNotifications: !!notificationDetails },
+        { event, fid, hasNotifications: !!notificationDetails },
         "[Farcaster Webhook] Parsed"
       );
 
@@ -191,7 +182,7 @@ async function farcasterWebhookRoutes(fastify) {
       switch (event) {
         case "miniapp_added":
           fastify.log.info(
-            { fid, appFid, hasNotifications: !!notificationDetails },
+            { fid, hasNotifications: !!notificationDetails },
             "[Farcaster Webhook] User added app"
           );
           // Store notification token if provided
@@ -199,7 +190,6 @@ async function farcasterWebhookRoutes(fastify) {
             await upsertNotificationToken(
               fastify,
               fid,
-              appFid,
               notificationDetails.url,
               notificationDetails.token
             );
@@ -207,17 +197,14 @@ async function farcasterWebhookRoutes(fastify) {
           break;
 
         case "miniapp_removed":
-          fastify.log.info(
-            { fid, appFid },
-            "[Farcaster Webhook] User removed app"
-          );
-          // Delete notification token for this client
-          await deleteNotificationToken(fastify, fid, appFid);
+          fastify.log.info({ fid }, "[Farcaster Webhook] User removed app");
+          // Delete notification tokens for this user
+          await deleteNotificationToken(fastify, fid);
           break;
 
         case "notifications_enabled":
           fastify.log.info(
-            { fid, appFid },
+            { fid },
             "[Farcaster Webhook] User enabled notifications"
           );
           // Store/update notification token
@@ -225,7 +212,6 @@ async function farcasterWebhookRoutes(fastify) {
             await upsertNotificationToken(
               fastify,
               fid,
-              appFid,
               notificationDetails.url,
               notificationDetails.token
             );
@@ -234,11 +220,11 @@ async function farcasterWebhookRoutes(fastify) {
 
         case "notifications_disabled":
           fastify.log.info(
-            { fid, appFid },
+            { fid },
             "[Farcaster Webhook] User disabled notifications"
           );
-          // Mark notifications as disabled (keep token for potential re-enable)
-          await disableNotifications(fastify, fid, appFid);
+          // Mark notifications as disabled
+          await disableNotifications(fastify, fid);
           break;
 
         default:

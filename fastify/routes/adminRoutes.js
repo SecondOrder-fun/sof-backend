@@ -2,10 +2,15 @@
 // Admin routes for manual InfoFi market creation and season management
 
 import process from "node:process";
-import { db } from "../../shared/supabaseClient.js";
+import { db, hasSupabase } from "../../shared/supabaseClient.js";
 import { publicClient } from "../../src/lib/viemClient.js";
 import raffleAbi from "../../src/abis/RaffleAbi.js";
 import { getPaymasterService } from "../../src/services/paymasterService.js";
+import {
+  sendNotificationToUser,
+  sendNotificationToAll,
+  getAllEnabledTokens,
+} from "../../shared/farcasterNotificationService.js";
 
 /**
  * Admin API routes
@@ -337,6 +342,142 @@ export default async function adminRoutes(fastify) {
       fastify.log.error({ error }, "Failed to fetch paymaster status");
       return reply.code(500).send({
         error: "Failed to fetch paymaster status",
+        details: error.message,
+      });
+    }
+  });
+
+  /**
+   * GET /api/admin/notification-stats
+   * Returns statistics about notification tokens
+   * Shape: { totalTokens, uniqueUsers, byClient: { [appFid]: count } }
+   */
+  fastify.get("/notification-stats", async (_request, reply) => {
+    try {
+      if (!hasSupabase) {
+        return reply.code(503).send({
+          error: "Supabase not configured",
+        });
+      }
+
+      const tokens = await getAllEnabledTokens();
+
+      // Calculate stats
+      const uniqueFids = new Set(tokens.map((t) => t.fid));
+
+      return reply.send({
+        totalTokens: tokens.length,
+        uniqueUsers: uniqueFids.size,
+      });
+    } catch (error) {
+      fastify.log.error({ error }, "Failed to fetch notification stats");
+      return reply.code(500).send({
+        error: "Failed to fetch notification stats",
+        details: error.message,
+      });
+    }
+  });
+
+  /**
+   * POST /api/admin/send-notification
+   * Send a notification to a specific user or all users
+   * Body: { fid?: number, title: string, body: string, targetUrl?: string }
+   * If fid is provided, sends to that user only. Otherwise broadcasts to all.
+   */
+  fastify.post("/send-notification", async (request, reply) => {
+    try {
+      const { fid, title, body, targetUrl } = request.body || {};
+
+      if (!title || typeof title !== "string") {
+        return reply.code(400).send({ error: "title is required" });
+      }
+
+      if (!body || typeof body !== "string") {
+        return reply.code(400).send({ error: "body is required" });
+      }
+
+      const notificationTargetUrl = targetUrl || "https://secondorder.fun";
+
+      let result;
+
+      if (fid !== undefined && fid !== null) {
+        // Send to specific user
+        const fidNum = Number(fid);
+        if (!Number.isFinite(fidNum) || fidNum <= 0) {
+          return reply
+            .code(400)
+            .send({ error: "fid must be a positive number" });
+        }
+
+        fastify.log.info(
+          { fid: fidNum, title },
+          "[Admin] Sending notification to user"
+        );
+
+        result = await sendNotificationToUser({
+          fid: fidNum,
+          title,
+          body,
+          targetUrl: notificationTargetUrl,
+        });
+      } else {
+        // Broadcast to all users
+        fastify.log.info(
+          { title },
+          "[Admin] Broadcasting notification to all users"
+        );
+
+        result = await sendNotificationToAll({
+          title,
+          body,
+          targetUrl: notificationTargetUrl,
+        });
+      }
+
+      return reply.send({
+        success: result.state === "success",
+        ...result,
+      });
+    } catch (error) {
+      fastify.log.error({ error }, "Failed to send notification");
+      return reply.code(500).send({
+        error: "Failed to send notification",
+        details: error.message,
+      });
+    }
+  });
+
+  /**
+   * GET /api/admin/notification-tokens
+   * Returns list of all notification tokens (for admin viewing)
+   * Shape: { tokens: [...], count }
+   */
+  fastify.get("/notification-tokens", async (request, reply) => {
+    try {
+      if (!hasSupabase) {
+        return reply.code(503).send({
+          error: "Supabase not configured",
+        });
+      }
+
+      const { data, error } = await db.client
+        .from("farcaster_notification_tokens")
+        .select("id, fid, notifications_enabled, created_at, updated_at")
+        .order("created_at", { ascending: false })
+        .limit(100);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      return reply.send({
+        tokens: data || [],
+        count: (data || []).length,
+      });
+    } catch (error) {
+      fastify.log.error({ error }, "Failed to fetch notification tokens");
+      return reply.code(500).send({
+        error: "Failed to fetch notification tokens",
         details: error.message,
       });
     }
