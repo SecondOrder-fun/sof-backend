@@ -179,7 +179,9 @@ async function farcasterWebhookRoutes(fastify) {
       );
 
       // Handle different event types
+      // Note: Base App uses "frame_added"/"frame_removed", Warpcast uses "miniapp_added"/"miniapp_removed"
       switch (event) {
+        case "frame_added":
         case "miniapp_added":
           fastify.log.info(
             { fid, hasNotifications: !!notificationDetails },
@@ -196,6 +198,7 @@ async function farcasterWebhookRoutes(fastify) {
           }
           break;
 
+        case "frame_removed":
         case "miniapp_removed":
           fastify.log.info({ fid }, "[Farcaster Webhook] User removed app");
           // Delete notification tokens for this user
