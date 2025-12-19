@@ -9,6 +9,29 @@ import SOFBondingCurveAbi from "../abis/SOFBondingCurveAbi.js";
  */
 class RaffleTransactionService {
   /**
+   * Ensure partition exists for a season before inserting
+   */
+  async ensurePartitionExists(seasonId) {
+    try {
+      const { error } = await db.client.rpc("create_raffle_tx_partition", {
+        season_num: seasonId,
+      });
+      if (error) {
+        // Ignore if function doesn't exist or partition already exists
+        // eslint-disable-next-line no-console
+        console.warn(`Partition check for season ${seasonId}:`, error.message);
+      }
+    } catch (err) {
+      // Silently ignore - partition may already exist or function not available
+      // eslint-disable-next-line no-console
+      console.warn(
+        `Partition creation attempt for season ${seasonId}:`,
+        err.message
+      );
+    }
+  }
+
+  /**
    * Record a transaction from PositionUpdate event (idempotent via tx_hash)
    */
   async recordTransaction({
@@ -24,6 +47,9 @@ class RaffleTransactionService {
     ticketsAfter,
   }) {
     try {
+      // Ensure partition exists for this season
+      await this.ensurePartitionExists(seasonId);
+
       // Calculate price per ticket
       const pricePerTicket =
         ticketAmount !== 0 ? Math.abs(sofAmount / ticketAmount) : null;

@@ -462,7 +462,9 @@ export default async function adminRoutes(fastify) {
 
       const { data, error } = await db.client
         .from("farcaster_notification_tokens")
-        .select("id, fid, notifications_enabled, created_at, updated_at")
+        .select(
+          "id, fid, app_key, notifications_enabled, created_at, updated_at"
+        )
         .order("created_at", { ascending: false })
         .limit(100);
 
