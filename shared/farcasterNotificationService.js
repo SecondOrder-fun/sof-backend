@@ -88,7 +88,7 @@ export async function sendNotificationToUser({ fid, title, body, targetUrl }) {
     });
 
     results.push({
-      appFid: tokenRecord.app_fid,
+      appKey: tokenRecord.app_key,
       ...result,
     });
   }
