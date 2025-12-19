@@ -5,12 +5,17 @@
 CREATE TABLE IF NOT EXISTS farcaster_notification_tokens (
     id BIGSERIAL PRIMARY KEY,
     fid BIGINT NOT NULL,                          -- User's Farcaster ID
+    app_key TEXT NOT NULL,                        -- Client's app key (unique per client)
     notification_url TEXT NOT NULL,               -- URL to POST notifications to
     notification_token TEXT NOT NULL UNIQUE,      -- Token is unique globally
     notifications_enabled BOOLEAN DEFAULT true,   -- Whether notifications are currently enabled
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Unique constraint: one token per (fid, app_key) combination
+CREATE UNIQUE INDEX IF NOT EXISTS idx_farcaster_notification_tokens_fid_app_key 
+    ON farcaster_notification_tokens(fid, app_key);
 
 -- Index for looking up all tokens for a user
 CREATE INDEX IF NOT EXISTS idx_farcaster_notification_tokens_fid 
