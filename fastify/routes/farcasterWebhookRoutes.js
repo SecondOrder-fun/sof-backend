@@ -9,6 +9,10 @@
  */
 
 import { db, hasSupabase } from "../../shared/supabaseClient.js";
+import {
+  addToAllowlist,
+  removeFromAllowlist,
+} from "../../shared/allowlistService.js";
 
 /**
  * Decode base64url encoded string to JSON
@@ -221,6 +225,26 @@ async function farcasterWebhookRoutes(fastify) {
               notificationDetails.token
             );
           }
+          // Add user to allowlist (respects time-gate)
+          try {
+            const allowlistResult = await addToAllowlist(fid, "webhook");
+            if (allowlistResult.success) {
+              fastify.log.info(
+                { fid, wallet: allowlistResult.entry?.wallet_address },
+                "[Farcaster Webhook] User added to allowlist"
+              );
+            } else {
+              fastify.log.info(
+                { fid, reason: allowlistResult.error },
+                "[Farcaster Webhook] User not added to allowlist"
+              );
+            }
+          } catch (allowlistError) {
+            fastify.log.warn(
+              { error: allowlistError.message, fid },
+              "[Farcaster Webhook] Failed to add user to allowlist"
+            );
+          }
           break;
 
         case "frame_removed":
@@ -231,6 +255,8 @@ async function farcasterWebhookRoutes(fastify) {
           );
           // Delete notification token for this specific client only
           await deleteNotificationToken(fastify, fid, appKey);
+          // Note: We do NOT remove from allowlist when app is removed
+          // Once allowlisted, users stay allowlisted (soft delete can be done manually)
           break;
 
         case "notifications_enabled":

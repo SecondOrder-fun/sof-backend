@@ -159,6 +159,15 @@ try {
   app.log.error({ err }, "Failed to mount /api/raffle");
 }
 
+try {
+  await app.register((await import("./routes/allowlistRoutes.js")).default, {
+    prefix: "/api/allowlist",
+  });
+  app.log.info("Mounted /api/allowlist");
+} catch (err) {
+  app.log.error({ err }, "Failed to mount /api/allowlist");
+}
+
 // Debug: print all mounted routes
 // app.ready(() => {
 //   try {
