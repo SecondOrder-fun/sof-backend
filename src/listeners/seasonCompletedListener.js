@@ -1,13 +1,172 @@
-import { publicClient } from "../lib/viemClient.js";
-import { db } from "../../shared/supabaseClient.js";
+import { publicClient, getWalletClient } from "../lib/viemClient.js";
+import { db, supabase } from "../../shared/supabaseClient.js";
 import { getChainByKey } from "../config/chain.js";
+import InfoFiMarketFactoryAbi from "../abis/InfoFiMarketFactoryAbi.js";
+
+/**
+ * Resolve InfoFi markets onchain via InfoFiMarketFactory.resolveSeasonMarkets()
+ * @param {number} seasonId - Season ID
+ * @param {string} winnerAddress - Winner's address
+ * @param {object} logger - Logger instance
+ * @returns {boolean} - Whether the onchain resolution succeeded
+ */
+async function resolveMarketsOnchain(seasonId, winnerAddress, logger) {
+  try {
+    const infoFiFactoryAddress = process.env.INFOFI_FACTORY_ADDRESS;
+    if (!infoFiFactoryAddress) {
+      logger.warn(
+        `   INFOFI_FACTORY_ADDRESS not configured, skipping onchain resolution`
+      );
+      return false;
+    }
+
+    const network = process.env.DEFAULT_NETWORK || "TESTNET";
+    const wallet = getWalletClient(network);
+
+    if (!wallet) {
+      logger.error(`   Wallet client not available for onchain resolution`);
+      return false;
+    }
+
+    logger.info(
+      `   📡 Calling resolveSeasonMarkets(${seasonId}, ${winnerAddress}) on ${infoFiFactoryAddress}`
+    );
+
+    const hash = await wallet.writeContract({
+      address: infoFiFactoryAddress,
+      abi: InfoFiMarketFactoryAbi,
+      functionName: "resolveSeasonMarkets",
+      args: [BigInt(seasonId), winnerAddress],
+    });
+
+    logger.info(`   ⏳ Transaction submitted: ${hash}`);
+
+    // Wait for confirmation
+    const receipt = await publicClient.waitForTransactionReceipt({
+      hash,
+      confirmations: 1,
+    });
+
+    if (receipt.status === "success") {
+      logger.info(
+        `   ✅ Onchain market resolution successful (block: ${receipt.blockNumber})`
+      );
+      return true;
+    } else {
+      logger.error(`   ❌ Onchain market resolution failed (reverted)`);
+      return false;
+    }
+  } catch (error) {
+    logger.error(`   ❌ Failed to resolve markets onchain: ${error.message}`);
+    // Log more details for debugging
+    if (error.shortMessage) {
+      logger.error(`   Short message: ${error.shortMessage}`);
+    }
+    return false;
+  }
+}
+
+/**
+ * Settle InfoFi markets for a completed season (both onchain and database)
+ * @param {number} seasonId - Season ID
+ * @param {string} raffleAddress - Raffle contract address
+ * @param {object} raffleAbi - Raffle contract ABI
+ * @param {object} logger - Logger instance
+ */
+async function settleInfoFiMarkets(seasonId, raffleAddress, raffleAbi, logger) {
+  try {
+    // Get winners from the raffle contract
+    const winners = await publicClient.readContract({
+      address: raffleAddress,
+      abi: raffleAbi,
+      functionName: "getWinners",
+      args: [BigInt(seasonId)],
+    });
+
+    if (!winners || winners.length === 0) {
+      logger.warn(
+        `   No winners found for season ${seasonId}, skipping InfoFi settlement`
+      );
+      return;
+    }
+
+    const winnerAddress = winners[0]; // First winner is the grand prize winner
+    logger.info(`   Season ${seasonId} winner: ${winnerAddress}`);
+
+    // Step 1: Resolve markets onchain first
+    const onchainSuccess = await resolveMarketsOnchain(
+      seasonId,
+      winnerAddress,
+      logger
+    );
+
+    if (!onchainSuccess) {
+      logger.warn(
+        `   Onchain resolution failed, but continuing with database update`
+      );
+    }
+
+    // Step 2: Update database records
+    const markets = await db.getInfoFiMarketsBySeasonId(seasonId);
+    if (!markets || markets.length === 0) {
+      logger.info(
+        `   No InfoFi markets found in database for season ${seasonId}`
+      );
+      return;
+    }
+
+    logger.info(
+      `   Found ${markets.length} InfoFi market(s) to settle in database`
+    );
+
+    // Update each market in the database
+    for (const market of markets) {
+      const isWinner =
+        market.player_address?.toLowerCase() === winnerAddress.toLowerCase();
+
+      const { error } = await supabase
+        .from("infofi_markets")
+        .update({
+          is_active: false,
+          is_settled: true,
+          settlement_time: new Date().toISOString(),
+          winning_outcome: isWinner,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", market.id);
+
+      if (error) {
+        logger.error(
+          `   Failed to settle market ${market.id} in DB: ${error.message}`
+        );
+      } else {
+        logger.info(
+          `   ✅ DB settled market ${market.id} (player: ${market.player_address}, won: ${isWinner})`
+        );
+      }
+    }
+
+    logger.info(`   InfoFi markets settlement complete for season ${seasonId}`);
+  } catch (error) {
+    logger.error(
+      `   Failed to settle InfoFi markets for season ${seasonId}: ${error.message}`
+    );
+  }
+}
 
 /**
  * Process a SeasonCompleted event log
  * @param {object} log - Event log from Viem
+ * @param {string} raffleAddress - Raffle contract address
+ * @param {object} raffleAbi - Raffle contract ABI
  * @param {object} logger - Logger instance
  */
-async function processSeasonCompletedLog(log, logger) {
+async function processSeasonCompletedLog(
+  log,
+  raffleAddress,
+  raffleAbi,
+  logger
+) {
   const { seasonId } = log.args;
 
   try {
@@ -30,6 +189,9 @@ async function processSeasonCompletedLog(log, logger) {
     logger.info(
       `✅ SeasonCompleted Event: Season ${seasonId} marked as inactive`
     );
+
+    // Settle InfoFi markets for this season
+    await settleInfoFiMarkets(seasonIdNum, raffleAddress, raffleAbi, logger);
   } catch (error) {
     logger.error(`❌ Failed to process SeasonCompleted for season ${seasonId}`);
     logger.error(`   Error: ${error.message}`);
@@ -77,7 +239,7 @@ async function scanHistoricalSeasonCompletedEvents(
       );
 
       for (const log of logs) {
-        await processSeasonCompletedLog(log, logger);
+        await processSeasonCompletedLog(log, raffleAddress, raffleAbi, logger);
       }
     } else {
       logger.info("   No historical SeasonCompleted events found");
@@ -92,7 +254,7 @@ async function scanHistoricalSeasonCompletedEvents(
 
 /**
  * Starts listening for SeasonCompleted events from the Raffle contract
- * Marks seasons as inactive when they complete
+ * Marks seasons as inactive when they complete and settles InfoFi markets
  * @param {string} raffleAddress - Raffle contract address
  * @param {object} raffleAbi - Raffle contract ABI
  * @param {object} logger - Fastify logger instance (app.log)
@@ -122,7 +284,7 @@ export async function startSeasonCompletedListener(
     eventName: "SeasonCompleted",
     onLogs: async (logs) => {
       for (const log of logs) {
-        await processSeasonCompletedLog(log, logger);
+        await processSeasonCompletedLog(log, raffleAddress, raffleAbi, logger);
       }
     },
     onError: (error) => {

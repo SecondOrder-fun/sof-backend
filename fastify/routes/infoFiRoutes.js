@@ -498,4 +498,165 @@ export default async function infoFiRoutes(fastify) {
       });
     }
   });
+
+  /**
+   * POST /api/infofi/admin/settle-season
+   * Manually settle all InfoFi markets for a completed season
+   * Body: { seasonId: number, winnerAddress: string, resolveOnchain?: boolean }
+   */
+  fastify.post("/admin/settle-season", async (request, reply) => {
+    try {
+      const {
+        seasonId,
+        winnerAddress,
+        resolveOnchain = true,
+      } = request.body || {};
+
+      if (!seasonId || !winnerAddress) {
+        return reply.code(400).send({
+          error: "seasonId and winnerAddress are required",
+        });
+      }
+
+      const normalizedWinner = winnerAddress.toLowerCase();
+      let onchainResult = null;
+
+      // Step 1: Resolve markets onchain if requested
+      if (resolveOnchain) {
+        const { getWalletClient, publicClient } = await import(
+          "../../src/lib/viemClient.js"
+        );
+        const InfoFiMarketFactoryAbi = (
+          await import("../../src/abis/InfoFiMarketFactoryAbi.js")
+        ).default;
+
+        const infoFiFactoryAddress = process.env.INFOFI_FACTORY_ADDRESS;
+        if (!infoFiFactoryAddress) {
+          onchainResult = {
+            success: false,
+            error: "INFOFI_FACTORY_ADDRESS not configured",
+          };
+        } else {
+          try {
+            const network = process.env.DEFAULT_NETWORK || "TESTNET";
+            const wallet = getWalletClient(network);
+
+            fastify.log.info(
+              `📡 Calling resolveSeasonMarkets(${seasonId}, ${winnerAddress})`
+            );
+
+            const hash = await wallet.writeContract({
+              address: infoFiFactoryAddress,
+              abi: InfoFiMarketFactoryAbi,
+              functionName: "resolveSeasonMarkets",
+              args: [BigInt(seasonId), winnerAddress],
+            });
+
+            fastify.log.info(`⏳ Transaction submitted: ${hash}`);
+
+            const receipt = await publicClient.waitForTransactionReceipt({
+              hash,
+              confirmations: 1,
+            });
+
+            onchainResult = {
+              success: receipt.status === "success",
+              hash,
+              blockNumber: Number(receipt.blockNumber),
+            };
+
+            fastify.log.info(
+              `✅ Onchain resolution complete: ${receipt.status}`
+            );
+          } catch (onchainError) {
+            onchainResult = {
+              success: false,
+              error: onchainError.message,
+              shortMessage: onchainError.shortMessage,
+            };
+            fastify.log.error(
+              { error: onchainError },
+              "Onchain resolution failed"
+            );
+          }
+        }
+      }
+
+      // Step 2: Update database records
+      const { data: markets, error: fetchError } = await supabase
+        .from("infofi_markets")
+        .select("*")
+        .eq("season_id", seasonId);
+
+      if (fetchError) {
+        throw new Error(fetchError.message);
+      }
+
+      if (!markets || markets.length === 0) {
+        return reply.send({
+          success: true,
+          message: `No InfoFi markets found for season ${seasonId}`,
+          settled: 0,
+          onchainResult,
+        });
+      }
+
+      let settled = 0;
+      const results = [];
+
+      // Update each market
+      for (const market of markets) {
+        const isWinner =
+          market.player_address?.toLowerCase() === normalizedWinner;
+
+        const { error: updateError } = await supabase
+          .from("infofi_markets")
+          .update({
+            is_active: false,
+            is_settled: true,
+            settlement_time: new Date().toISOString(),
+            winning_outcome: isWinner,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", market.id);
+
+        if (updateError) {
+          results.push({
+            marketId: market.id,
+            player: market.player_address,
+            error: updateError.message,
+          });
+        } else {
+          settled++;
+          results.push({
+            marketId: market.id,
+            player: market.player_address,
+            isWinner,
+            settled: true,
+          });
+        }
+      }
+
+      fastify.log.info(
+        { seasonId, winnerAddress, settled, total: markets.length },
+        "InfoFi markets settled"
+      );
+
+      return reply.send({
+        success: true,
+        seasonId,
+        winnerAddress,
+        settled,
+        total: markets.length,
+        results,
+        onchainResult,
+      });
+    } catch (error) {
+      fastify.log.error({ error }, "Error settling InfoFi markets");
+      return reply.code(500).send({
+        error: "Failed to settle markets",
+        details: error.message,
+      });
+    }
+  });
 }
