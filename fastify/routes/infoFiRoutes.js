@@ -530,15 +530,16 @@ export default async function infoFiRoutes(fastify) {
           await import("../../src/abis/InfoFiMarketFactoryAbi.js")
         ).default;
 
-        const infoFiFactoryAddress = process.env.INFOFI_FACTORY_ADDRESS;
+        const network = process.env.DEFAULT_NETWORK || "TESTNET";
+        const envKey = `INFOFI_FACTORY_ADDRESS_${network}`;
+        const infoFiFactoryAddress = process.env[envKey];
         if (!infoFiFactoryAddress) {
           onchainResult = {
             success: false,
-            error: "INFOFI_FACTORY_ADDRESS not configured",
+            error: `${envKey} not configured`,
           };
         } else {
           try {
-            const network = process.env.DEFAULT_NETWORK || "TESTNET";
             const wallet = getWalletClient(network);
 
             fastify.log.info(

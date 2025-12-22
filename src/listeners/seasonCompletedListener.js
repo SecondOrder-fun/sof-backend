@@ -12,15 +12,13 @@ import InfoFiMarketFactoryAbi from "../abis/InfoFiMarketFactoryAbi.js";
  */
 async function resolveMarketsOnchain(seasonId, winnerAddress, logger) {
   try {
-    const infoFiFactoryAddress = process.env.INFOFI_FACTORY_ADDRESS;
+    const network = process.env.DEFAULT_NETWORK || "TESTNET";
+    const envKey = `INFOFI_FACTORY_ADDRESS_${network}`;
+    const infoFiFactoryAddress = process.env[envKey];
     if (!infoFiFactoryAddress) {
-      logger.warn(
-        `   INFOFI_FACTORY_ADDRESS not configured, skipping onchain resolution`
-      );
+      logger.warn(`   ${envKey} not configured, skipping onchain resolution`);
       return false;
     }
-
-    const network = process.env.DEFAULT_NETWORK || "TESTNET";
     const wallet = getWalletClient(network);
 
     if (!wallet) {
