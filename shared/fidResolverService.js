@@ -7,6 +7,7 @@
 import process from "node:process";
 
 const FARCASTER_API_BASE = "https://api.farcaster.xyz";
+const FARCASTER_FNAME_API = "https://fnames.farcaster.xyz";
 const NEYNAR_API_BASE = "https://api.neynar.com/v2";
 
 /**
@@ -50,6 +51,36 @@ export async function resolveFidToWallet(fid) {
 
   // Return null address if resolution failed
   return { address: null };
+}
+
+/**
+ * Get username for a FID using Farcaster FName Registry (no API key needed)
+ * @param {number} fid
+ * @returns {Promise<string|null>}
+ */
+async function getUsernameViaFnameRegistry(fid) {
+  try {
+    const url = `${FARCASTER_FNAME_API}/transfers?fid=${fid}`;
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" },
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    // Get the most recent transfer (last in array) for this FID
+    const transfers = data.transfers || [];
+    if (transfers.length > 0) {
+      // Find the transfer where this FID is the recipient (to field)
+      const relevantTransfer = transfers.find((t) => t.to === fid);
+      return relevantTransfer?.username || null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -133,7 +164,8 @@ async function resolveFidViaNeynar(fid, apiKey) {
 }
 
 /**
- * Bulk resolve multiple FIDs to wallet addresses
+ * Bulk resolve multiple FIDs to wallet addresses and usernames
+ * Uses Farcaster FName Registry API (no key needed) with Neynar fallback
  * @param {number[]} fids - Array of Farcaster IDs
  * @returns {Promise<Map<number, {address: string|null, username?: string, displayName?: string}>>}
  */
@@ -146,7 +178,7 @@ export async function bulkResolveFidsToWallets(fids) {
 
   const neynarApiKey = process.env.NEYNAR_API_KEY;
 
-  // If we have Neynar API key, use bulk endpoint
+  // If we have Neynar API key, use bulk endpoint (includes pfp, displayName)
   if (neynarApiKey) {
     try {
       const url = `${NEYNAR_API_BASE}/farcaster/user/bulk?fids=${fids.join(
@@ -192,13 +224,36 @@ export async function bulkResolveFidsToWallets(fids) {
     }
   }
 
-  // Fallback to individual resolution
+  // Fallback: Use Farcaster FName Registry API for usernames (no API key needed)
+  // and Farcaster primary-address API for wallet addresses
+  console.log(
+    `[FID Resolver] Using Farcaster APIs for ${fids.length} FIDs (no Neynar key)`
+  );
+
+  // Fetch usernames in parallel using FName Registry
+  const usernamePromises = fids.map(async (fid) => {
+    const username = await getUsernameViaFnameRegistry(fid);
+    return { fid, username };
+  });
+
+  const usernameResults = await Promise.all(usernamePromises);
+  const usernameMap = new Map(usernameResults.map((r) => [r.fid, r.username]));
+
+  // Fetch wallet addresses in parallel
   for (const fid of fids) {
     try {
-      const result = await resolveFidToWallet(fid);
-      results.set(fid, result);
-    } catch (error) {
-      results.set(fid, { address: null });
+      const walletResult = await resolveFidToWallet(fid);
+      results.set(fid, {
+        address: walletResult.address,
+        username: usernameMap.get(fid) || walletResult.username || null,
+        displayName: walletResult.displayName || null,
+        pfpUrl: walletResult.pfpUrl || null,
+      });
+    } catch {
+      results.set(fid, {
+        address: null,
+        username: usernameMap.get(fid) || null,
+      });
     }
   }
 

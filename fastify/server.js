@@ -168,6 +168,15 @@ try {
   app.log.error({ err }, "Failed to mount /api/allowlist");
 }
 
+try {
+  await app.register((await import("./routes/nftDropRoutes.js")).default, {
+    prefix: "/api/nft-drops",
+  });
+  app.log.info("Mounted /api/nft-drops");
+} catch (err) {
+  app.log.error({ err }, "Failed to mount /api/nft-drops");
+}
+
 // Debug: print all mounted routes
 // app.ready(() => {
 //   try {

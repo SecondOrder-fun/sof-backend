@@ -14,7 +14,10 @@ import {
   updateAllowlistConfig,
   retryPendingWalletResolutions,
 } from "../../shared/allowlistService.js";
-import { resolveFidToWallet } from "../../shared/fidResolverService.js";
+import {
+  resolveFidToWallet,
+  bulkResolveFidsToWallets,
+} from "../../shared/fidResolverService.js";
 import { db, hasSupabase } from "../../shared/supabaseClient.js";
 
 /**
@@ -112,16 +115,50 @@ export default async function allowlistRoutes(fastify) {
   /**
    * GET /api/allowlist/entries
    * Get all allowlist entries (admin)
-   * Query: ?activeOnly=true&limit=100
+   * Query: ?activeOnly=true&limit=100&includeUsernames=true
    */
   fastify.get("/entries", async (request, reply) => {
-    const { activeOnly = "true", limit = "100" } = request.query;
+    const {
+      activeOnly = "true",
+      limit = "100",
+      includeUsernames = "true",
+    } = request.query;
 
     try {
       const result = await getAllowlistEntries({
         activeOnly: activeOnly !== "false",
         limit: Math.min(Number(limit) || 100, 500),
       });
+
+      // Fetch Farcaster usernames if requested
+      if (includeUsernames !== "false" && result.entries?.length > 0) {
+        const fids = result.entries
+          .filter((e) => e.fid && e.fid > 0)
+          .map((e) => e.fid);
+
+        if (fids.length > 0) {
+          try {
+            const userInfoMap = await bulkResolveFidsToWallets(fids);
+
+            // Enrich entries with username info
+            result.entries = result.entries.map((entry) => {
+              const userInfo = userInfoMap.get(entry.fid);
+              return {
+                ...entry,
+                username: userInfo?.username || null,
+                displayName: userInfo?.displayName || null,
+                pfpUrl: userInfo?.pfpUrl || null,
+              };
+            });
+          } catch (userError) {
+            fastify.log.warn(
+              { error: userError.message },
+              "Failed to fetch Farcaster usernames"
+            );
+          }
+        }
+      }
+
       return reply.send(result);
     } catch (error) {
       fastify.log.error({ error }, "Failed to fetch allowlist entries");
