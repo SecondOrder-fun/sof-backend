@@ -526,17 +526,18 @@ export default async function infoFiRoutes(fastify) {
         const { getWalletClient, publicClient } = await import(
           "../../src/lib/viemClient.js"
         );
+        const { getChainByKey } = await import("../../src/config/chain.js");
         const InfoFiMarketFactoryAbi = (
           await import("../../src/abis/InfoFiMarketFactoryAbi.js")
         ).default;
 
         const network = process.env.DEFAULT_NETWORK || "TESTNET";
-        const envKey = `INFOFI_FACTORY_ADDRESS_${network}`;
-        const infoFiFactoryAddress = process.env[envKey];
+        const chain = getChainByKey(network);
+        const infoFiFactoryAddress = chain.infofiFactory;
         if (!infoFiFactoryAddress) {
           onchainResult = {
             success: false,
-            error: `${envKey} not configured`,
+            error: `INFOFI_FACTORY_ADDRESS_${network} not configured`,
           };
         } else {
           try {
