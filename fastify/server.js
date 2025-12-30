@@ -177,6 +177,33 @@ try {
   app.log.error({ err }, "Failed to mount /api/nft-drops");
 }
 
+try {
+  await app.register((await import("./routes/accessRoutes.js")).default, {
+    prefix: "/api/access",
+  });
+  app.log.info("Mounted /api/access");
+} catch (err) {
+  app.log.error({ err }, "Failed to mount /api/access");
+}
+
+try {
+  await app.register((await import("./routes/groupRoutes.js")).default, {
+    prefix: "/api/access",
+  });
+  app.log.info("Mounted /api/access (groups)");
+} catch (err) {
+  app.log.error({ err }, "Failed to mount /api/access (groups)");
+}
+
+try {
+  await app.register((await import("./routes/routeConfigRoutes.js")).default, {
+    prefix: "/api/access",
+  });
+  app.log.info("Mounted /api/access (route-config)");
+} catch (err) {
+  app.log.error({ err }, "Failed to mount /api/access (route-config)");
+}
+
 // Debug: print all mounted routes
 // app.ready(() => {
 //   try {

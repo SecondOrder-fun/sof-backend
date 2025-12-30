@@ -500,6 +500,100 @@ export default async function infoFiRoutes(fastify) {
   });
 
   /**
+   * GET /api/infofi/winnings/:userAddress
+   * Get all claimable winnings for a user
+   *
+   * Query params:
+   * - marketId: Filter by specific market (optional)
+   * - isClaimed: Filter by claimed status (optional, default: false)
+   *
+   * Returns: { winnings: [...] }
+   */
+  fastify.get("/winnings/:userAddress", async (request, reply) => {
+    try {
+      const { userAddress } = request.params;
+      const { marketId, isClaimed } = request.query;
+
+      let query = supabase
+        .from("infofi_winnings")
+        .select(
+          `
+          id,
+          user_address,
+          market_id,
+          amount,
+          is_claimed,
+          claimed_at,
+          created_at,
+          infofi_markets (
+            id,
+            season_id,
+            player_address,
+            market_type,
+            contract_address,
+            is_settled,
+            winning_outcome
+          )
+        `
+        )
+        .eq("user_address", userAddress.toLowerCase());
+
+      // Filter by claimed status (default to unclaimed only)
+      if (isClaimed !== undefined) {
+        query = query.eq("is_claimed", isClaimed === "true");
+      } else {
+        query = query.eq("is_claimed", false);
+      }
+
+      if (marketId) {
+        query = query.eq("market_id", parseInt(marketId));
+      }
+
+      const { data, error } = await query.order("created_at", {
+        ascending: false,
+      });
+
+      if (error) {
+        fastify.log.error({ error }, "Failed to fetch winnings");
+        return reply.code(500).send({
+          error: "Failed to fetch winnings",
+          details: error.message,
+        });
+      }
+
+      // Transform to match frontend expectations
+      const winnings = (data || []).map((w) => ({
+        id: w.id,
+        user_address: w.user_address,
+        market_id: w.market_id,
+        amount: w.amount,
+        is_claimed: w.is_claimed,
+        claimed_at: w.claimed_at,
+        created_at: w.created_at,
+        market: w.infofi_markets
+          ? {
+              id: w.infofi_markets.id,
+              season_id: w.infofi_markets.season_id,
+              player_address: w.infofi_markets.player_address,
+              market_type: w.infofi_markets.market_type,
+              contract_address: w.infofi_markets.contract_address,
+              is_settled: w.infofi_markets.is_settled,
+              winning_outcome: w.infofi_markets.winning_outcome,
+            }
+          : null,
+      }));
+
+      return reply.send({ winnings });
+    } catch (error) {
+      fastify.log.error({ error }, "Error fetching winnings");
+      return reply.code(500).send({
+        error: "Failed to fetch winnings",
+        details: error.message,
+      });
+    }
+  });
+
+  /**
    * POST /api/infofi/admin/settle-season
    * Manually settle all InfoFi markets for a completed season
    * Body: { seasonId: number, winnerAddress: string, resolveOnchain?: boolean }
@@ -606,7 +700,7 @@ export default async function infoFiRoutes(fastify) {
       let settled = 0;
       const results = [];
 
-      // Update each market
+      // Update each market and create winnings entries
       for (const market of markets) {
         const isWinner =
           market.player_address?.toLowerCase() === normalizedWinner;
@@ -628,15 +722,66 @@ export default async function infoFiRoutes(fastify) {
             player: market.player_address,
             error: updateError.message,
           });
-        } else {
-          settled++;
-          results.push({
-            marketId: market.id,
-            player: market.player_address,
-            isWinner,
-            settled: true,
-          });
+          continue;
         }
+
+        // Step 3: Calculate winnings for users who bet on the winning outcome
+        // Get all positions for this market
+        const { data: positions, error: posError } = await supabase
+          .from("infofi_positions")
+          .select("*")
+          .eq("market_id", market.id);
+
+        if (posError) {
+          fastify.log.error(
+            { error: posError, marketId: market.id },
+            "Failed to fetch positions for market"
+          );
+        } else if (positions && positions.length > 0) {
+          // Determine winning outcome: YES if player won, NO if player lost
+          const winningOutcome = isWinner ? "YES" : "NO";
+
+          // Calculate winnings for each user who bet on the winning outcome
+          for (const pos of positions) {
+            if (pos.outcome === winningOutcome) {
+              // Check if winning already exists
+              const { data: existingWinning } = await supabase
+                .from("infofi_winnings")
+                .select("id")
+                .eq("user_address", pos.user_address)
+                .eq("market_id", market.id)
+                .single();
+
+              if (!existingWinning) {
+                // Create winning entry (amount = position amount for now, can be adjusted)
+                const { error: winError } = await supabase
+                  .from("infofi_winnings")
+                  .insert({
+                    user_address: pos.user_address,
+                    market_id: market.id,
+                    amount: pos.amount, // Payout amount
+                    is_claimed: false,
+                    created_at: new Date().toISOString(),
+                  });
+
+                if (winError) {
+                  fastify.log.error(
+                    { error: winError, position: pos },
+                    "Failed to create winning entry"
+                  );
+                }
+              }
+            }
+          }
+        }
+
+        settled++;
+        results.push({
+          marketId: market.id,
+          player: market.player_address,
+          isWinner,
+          settled: true,
+        });
       }
 
       fastify.log.info(

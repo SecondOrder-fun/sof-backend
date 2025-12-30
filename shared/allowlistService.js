@@ -5,6 +5,7 @@
 
 import { db, hasSupabase } from "./supabaseClient.js";
 import { resolveFidToWallet } from "./fidResolverService.js";
+import { getDefaultAccessLevel } from "./accessService.js";
 
 /**
  * Check if the allowlist window is currently open
@@ -158,6 +159,9 @@ export async function addToAllowlist(
       // Continue without wallet - can be resolved later
     }
 
+    // Get default access level
+    const defaultLevel = await getDefaultAccessLevel();
+
     // Insert new entry
     const { data: entry, error: insertError } = await db.client
       .from("allowlist_entries")
@@ -168,6 +172,7 @@ export async function addToAllowlist(
         display_name: walletData.displayName,
         source,
         is_active: true,
+        access_level: defaultLevel,
         added_at: new Date().toISOString(),
         wallet_resolved_at: walletData.address
           ? new Date().toISOString()
