@@ -79,8 +79,8 @@ function buildRpcTransport(chainKey, rpcUrl) {
   const activeUrls = allUrls.filter((url) => !isRpcBad(url, now));
   const urlsToUse = activeUrls.length > 0 ? activeUrls : allUrls;
 
-  const httpTransports = urlsToUse.map((url) => {
-    const baseTransport = http(url, {
+  const httpTransports = urlsToUse.map((url) =>
+    http(url, {
       onFetchResponse(response) {
         if (response.status === 403 || response.status === 429) {
           markRpcBad(url, Date.now());
@@ -91,18 +91,8 @@ function buildRpcTransport(chainKey, rpcUrl) {
           throw new Error(`RPC ${url} responded with ${response.status}`);
         }
       },
-    });
-
-    return {
-      ...baseTransport,
-      request(requestArgs) {
-        if (isRpcBad(url, Date.now())) {
-          throw new Error(`RPC ${url} temporarily disabled`);
-        }
-        return baseTransport.request(requestArgs);
-      },
-    };
-  });
+    }),
+  );
 
   return httpTransports.length > 1
     ? fallback(httpTransports, { rank: false })

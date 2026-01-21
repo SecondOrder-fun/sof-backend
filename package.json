@@ -1,6 +1,6 @@
 {
   "name": "sof-backend",
-  "version": "0.1.0",
+  "version": "0.9.1",
   "private": true,
   "type": "module",
   "description": "SecondOrder.fun Backend API Server",
@@ -35,6 +35,6 @@
     "vitest": "^1.0.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   }
 }
