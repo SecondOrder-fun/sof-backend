@@ -1,7 +1,7 @@
 // tests/api/historicalOddsRoutes.test.js
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import Fastify from 'fastify';
-import { infoFiRoutes } from '../../backend/fastify/routes/infoFiRoutes.js';
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import Fastify from "fastify";
+import { infoFiRoutes } from "../../fastify/routes/infoFiRoutes.js";
 
 /**
  * Integration tests for Historical Odds API endpoint
@@ -9,26 +9,26 @@ import { infoFiRoutes } from '../../backend/fastify/routes/infoFiRoutes.js';
  */
 
 // Mock dependencies
-vi.mock('../../backend/shared/supabaseClient.js', () => ({
+vi.mock("../../shared/supabaseClient.js", () => ({
   db: {
     getInfoFiMarketById: vi.fn(),
   },
 }));
 
-vi.mock('../../backend/shared/historicalOddsService.js', () => ({
+vi.mock("../../shared/historicalOddsService.js", () => ({
   historicalOddsService: {
     getHistoricalOdds: vi.fn(),
   },
 }));
 
-vi.mock('../../backend/shared/pricingService.js', () => ({
+vi.mock("../../shared/pricingService.js", () => ({
   pricingService: {
     getCachedPricing: vi.fn(),
     subscribeToMarket: vi.fn(() => () => {}),
   },
 }));
 
-vi.mock('../../backend/shared/marketMakerService.js', () => ({
+vi.mock("../../shared/marketMakerService.js", () => ({
   marketMakerService: {
     quote: vi.fn(),
     buy: vi.fn(),
@@ -36,36 +36,36 @@ vi.mock('../../backend/shared/marketMakerService.js', () => ({
   },
 }));
 
-vi.mock('../../backend/src/lib/viemClient.js', () => ({
+vi.mock("../../src/lib/viemClient.js", () => ({
   getPublicClient: vi.fn(),
 }));
 
-vi.mock('../../backend/src/config/chain.js', () => ({
+vi.mock("../../src/config/chain.js", () => ({
   getChainByKey: vi.fn(),
 }));
 
-import { db } from '../../backend/shared/supabaseClient.js';
-import { historicalOddsService } from '../../backend/shared/historicalOddsService.js';
+import { db } from "../../shared/supabaseClient.js";
+import { historicalOddsService } from "../../shared/historicalOddsService.js";
 
-describe('Historical Odds API Routes', () => {
+describe("Historical Odds API Routes", () => {
   let app;
 
   beforeAll(async () => {
     app = Fastify();
-    await app.register(infoFiRoutes, { prefix: '/api/infofi' });
+    await app.register(infoFiRoutes, { prefix: "/api/infofi" });
   });
 
   afterAll(async () => {
     await app.close();
   });
 
-  describe('GET /api/infofi/markets/:marketId/history', () => {
-    it('should return historical odds data for valid market', async () => {
+  describe("GET /api/infofi/markets/:marketId/history", () => {
+    it("should return historical odds data for valid market", async () => {
       // Mock market lookup
       db.getInfoFiMarketById.mockResolvedValue({
         id: 0,
         season_id: 1,
-        market_type: 'WINNER_PREDICTION',
+        market_type: "WINNER_PREDICTION",
       });
 
       // Mock historical data
@@ -93,21 +93,21 @@ describe('Historical Odds API Routes', () => {
       });
 
       const response = await app.inject({
-        method: 'GET',
-        url: '/api/infofi/markets/0/history?range=1D',
+        method: "GET",
+        url: "/api/infofi/markets/0/history?range=1D",
       });
 
       expect(response.statusCode).toBe(200);
       const body = JSON.parse(response.body);
-      expect(body.marketId).toBe('0');
-      expect(body.seasonId).toBe('1');
-      expect(body.range).toBe('1D');
+      expect(body.marketId).toBe("0");
+      expect(body.seasonId).toBe("1");
+      expect(body.range).toBe("1D");
       expect(body.dataPoints).toHaveLength(2);
       expect(body.count).toBe(2);
       expect(body.downsampled).toBe(false);
     });
 
-    it('should default to ALL range when not specified', async () => {
+    it("should default to ALL range when not specified", async () => {
       db.getInfoFiMarketById.mockResolvedValue({
         id: 0,
         season_id: 1,
@@ -120,61 +120,61 @@ describe('Historical Odds API Routes', () => {
       });
 
       const response = await app.inject({
-        method: 'GET',
-        url: '/api/infofi/markets/0/history',
+        method: "GET",
+        url: "/api/infofi/markets/0/history",
       });
 
       expect(response.statusCode).toBe(200);
       const body = JSON.parse(response.body);
-      expect(body.range).toBe('ALL');
+      expect(body.range).toBe("ALL");
     });
 
-    it('should reject invalid time range', async () => {
+    it("should reject invalid time range", async () => {
       const response = await app.inject({
-        method: 'GET',
-        url: '/api/infofi/markets/0/history?range=INVALID',
+        method: "GET",
+        url: "/api/infofi/markets/0/history?range=INVALID",
       });
 
       expect(response.statusCode).toBe(400);
       const body = JSON.parse(response.body);
-      expect(body.error).toContain('Invalid time range');
+      expect(body.error).toContain("Invalid time range");
     });
 
-    it('should return 404 for non-existent market', async () => {
+    it("should return 404 for non-existent market", async () => {
       db.getInfoFiMarketById.mockResolvedValue(null);
 
       const response = await app.inject({
-        method: 'GET',
-        url: '/api/infofi/markets/999/history?range=1D',
+        method: "GET",
+        url: "/api/infofi/markets/999/history?range=1D",
       });
 
       expect(response.statusCode).toBe(404);
       const body = JSON.parse(response.body);
-      expect(body.error).toBe('Market not found');
+      expect(body.error).toBe("Market not found");
     });
 
-    it('should handle service errors gracefully', async () => {
+    it("should handle service errors gracefully", async () => {
       db.getInfoFiMarketById.mockResolvedValue({
         id: 0,
         season_id: 1,
       });
 
       historicalOddsService.getHistoricalOdds.mockRejectedValue(
-        new Error('Redis connection failed')
+        new Error("Redis connection failed"),
       );
 
       const response = await app.inject({
-        method: 'GET',
-        url: '/api/infofi/markets/0/history?range=1D',
+        method: "GET",
+        url: "/api/infofi/markets/0/history?range=1D",
       });
 
       expect(response.statusCode).toBe(500);
       const body = JSON.parse(response.body);
-      expect(body.error).toBe('Failed to fetch historical odds');
-      expect(body.message).toBe('Redis connection failed');
+      expect(body.error).toBe("Failed to fetch historical odds");
+      expect(body.message).toBe("Redis connection failed");
     });
 
-    it('should support all valid time ranges', async () => {
+    it("should support all valid time ranges", async () => {
       db.getInfoFiMarketById.mockResolvedValue({
         id: 0,
         season_id: 1,
@@ -186,11 +186,11 @@ describe('Historical Odds API Routes', () => {
         downsampled: false,
       });
 
-      const validRanges = ['1H', '6H', '1D', '1W', '1M', 'ALL'];
+      const validRanges = ["1H", "6H", "1D", "1W", "1M", "ALL"];
 
       for (const range of validRanges) {
         const response = await app.inject({
-          method: 'GET',
+          method: "GET",
           url: `/api/infofi/markets/0/history?range=${range}`,
         });
 
@@ -200,7 +200,7 @@ describe('Historical Odds API Routes', () => {
       }
     });
 
-    it('should include downsampled flag in response', async () => {
+    it("should include downsampled flag in response", async () => {
       db.getInfoFiMarketById.mockResolvedValue({
         id: 0,
         season_id: 1,
@@ -220,8 +220,8 @@ describe('Historical Odds API Routes', () => {
       });
 
       const response = await app.inject({
-        method: 'GET',
-        url: '/api/infofi/markets/0/history?range=ALL',
+        method: "GET",
+        url: "/api/infofi/markets/0/history?range=ALL",
       });
 
       expect(response.statusCode).toBe(200);
@@ -230,7 +230,7 @@ describe('Historical Odds API Routes', () => {
       expect(body.count).toBe(500);
     });
 
-    it('should use raffle_id as fallback for season_id', async () => {
+    it("should use raffle_id as fallback for season_id", async () => {
       db.getInfoFiMarketById.mockResolvedValue({
         id: 0,
         raffle_id: 2, // No season_id, use raffle_id
@@ -243,23 +243,23 @@ describe('Historical Odds API Routes', () => {
       });
 
       const response = await app.inject({
-        method: 'GET',
-        url: '/api/infofi/markets/0/history?range=1D',
+        method: "GET",
+        url: "/api/infofi/markets/0/history?range=1D",
       });
 
       expect(response.statusCode).toBe(200);
       const body = JSON.parse(response.body);
-      expect(body.seasonId).toBe('2');
-      
+      expect(body.seasonId).toBe("2");
+
       // Verify service was called with raffle_id
       expect(historicalOddsService.getHistoricalOdds).toHaveBeenCalledWith(
         2,
-        '0',
-        '1D'
+        "0",
+        "1D",
       );
     });
 
-    it('should default to 0 when no season or raffle ID', async () => {
+    it("should default to 0 when no season or raffle ID", async () => {
       db.getInfoFiMarketById.mockResolvedValue({
         id: 0,
         // No season_id or raffle_id
@@ -272,13 +272,13 @@ describe('Historical Odds API Routes', () => {
       });
 
       const response = await app.inject({
-        method: 'GET',
-        url: '/api/infofi/markets/0/history?range=1D',
+        method: "GET",
+        url: "/api/infofi/markets/0/history?range=1D",
       });
 
       expect(response.statusCode).toBe(200);
       const body = JSON.parse(response.body);
-      expect(body.seasonId).toBe('0');
+      expect(body.seasonId).toBe("0");
     });
   });
 });
