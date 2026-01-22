@@ -1,7 +1,7 @@
 // tests/api/historicalOddsRoutes.test.js
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import Fastify from "fastify";
-import { infoFiRoutes } from "../../fastify/routes/infoFiRoutes.js";
+import infoFiRoutes from "../../fastify/routes/infoFiRoutes.js";
 
 /**
  * Integration tests for Historical Odds API endpoint
@@ -19,6 +19,7 @@ vi.mock("../../shared/historicalOddsService.js", () => ({
   historicalOddsService: {
     getHistoricalOdds: vi.fn(),
   },
+  historicalOddsRanges: ["1H", "6H", "1D", "1W", "1M", "ALL"],
 }));
 
 vi.mock("../../shared/pricingService.js", () => ({

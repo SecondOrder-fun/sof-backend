@@ -1,6 +1,10 @@
 // backend/fastify/routes/infoFiRoutes.js
-import { supabase } from "../../shared/supabaseClient.js";
+import { supabase, db } from "../../shared/supabaseClient.js";
 import { infoFiPositionService } from "../../src/services/infoFiPositionService.js";
+import {
+  historicalOddsService,
+  historicalOddsRanges,
+} from "../../shared/historicalOddsService.js";
 
 /**
  * InfoFi Markets API Routes
@@ -40,7 +44,7 @@ export default async function infoFiRoutes(fastify) {
           winning_outcome,
           created_at,
           updated_at
-        `
+        `,
         )
         .order("created_at", { ascending: false });
 
@@ -139,7 +143,7 @@ export default async function infoFiRoutes(fastify) {
           winning_outcome,
           created_at,
           updated_at
-        `
+        `,
         )
         .eq("id", marketId)
         .single();
@@ -186,6 +190,59 @@ export default async function infoFiRoutes(fastify) {
   });
 
   /**
+   * GET /api/infofi/markets/:marketId/history
+   * Get historical odds for a market
+   *
+   * Query params:
+   * - range: Time range (1H, 6H, 1D, 1W, 1M, ALL)
+   *
+   * Returns: { marketId, seasonId, range, dataPoints, count, downsampled }
+   */
+  fastify.get("/markets/:marketId/history", async (request, reply) => {
+    try {
+      const { marketId } = request.params;
+      const { range = "ALL" } = request.query;
+
+      if (!historicalOddsRanges.includes(range)) {
+        return reply.code(400).send({
+          error: `Invalid time range. Supported ranges: ${historicalOddsRanges.join(
+            ", ",
+          )}`,
+        });
+      }
+
+      const market = await db.getInfoFiMarketById(marketId);
+      if (!market) {
+        return reply.code(404).send({ error: "Market not found" });
+      }
+
+      const seasonId =
+        market.season_id ?? market.raffle_id ?? market.raffleId ?? 0;
+
+      const result = await historicalOddsService.getHistoricalOdds(
+        seasonId,
+        marketId,
+        range,
+      );
+
+      return reply.send({
+        marketId: String(marketId),
+        seasonId: String(seasonId),
+        range,
+        dataPoints: result.dataPoints,
+        count: result.count,
+        downsampled: result.downsampled,
+      });
+    } catch (error) {
+      fastify.log.error({ error }, "Error fetching historical odds");
+      return reply.code(500).send({
+        error: "Failed to fetch historical odds",
+        message: error.message,
+      });
+    }
+  });
+
+  /**
    * GET /api/infofi/seasons/:seasonId/markets
    * Get all markets for a specific season
    *
@@ -213,7 +270,7 @@ export default async function infoFiRoutes(fastify) {
           winning_outcome,
           created_at,
           updated_at
-        `
+        `,
         )
         .eq("season_id", seasonId)
         .order("created_at", { ascending: false });
@@ -362,7 +419,7 @@ export default async function infoFiRoutes(fastify) {
     } catch (error) {
       fastify.log.error(
         { error },
-        "Unexpected error fetching markets admin summary"
+        "Unexpected error fetching markets admin summary",
       );
       return reply.code(500).send({
         error: "Internal server error",
@@ -387,7 +444,7 @@ export default async function infoFiRoutes(fastify) {
 
       const positions = await infoFiPositionService.getUserPositions(
         userAddress,
-        marketId ? parseInt(marketId) : null
+        marketId ? parseInt(marketId) : null,
       );
 
       return { positions };
@@ -422,7 +479,7 @@ export default async function infoFiRoutes(fastify) {
 
       const positions = await infoFiPositionService.getAggregatedPosition(
         userAddress,
-        parseInt(marketId)
+        parseInt(marketId),
       );
 
       return { positions };
@@ -457,7 +514,7 @@ export default async function infoFiRoutes(fastify) {
 
       const netPosition = await infoFiPositionService.getNetPosition(
         userAddress,
-        parseInt(marketId)
+        parseInt(marketId),
       );
 
       return netPosition;
@@ -486,7 +543,7 @@ export default async function infoFiRoutes(fastify) {
 
       const result = await infoFiPositionService.syncMarketPositions(
         fpmmAddress,
-        fromBlock ? BigInt(fromBlock) : null
+        fromBlock ? BigInt(fromBlock) : null,
       );
 
       return result;
@@ -534,7 +591,7 @@ export default async function infoFiRoutes(fastify) {
             is_settled,
             winning_outcome
           )
-        `
+        `,
         )
         .eq("user_address", userAddress.toLowerCase());
 
@@ -617,9 +674,8 @@ export default async function infoFiRoutes(fastify) {
 
       // Step 1: Resolve markets onchain if requested
       if (resolveOnchain) {
-        const { getWalletClient, publicClient } = await import(
-          "../../src/lib/viemClient.js"
-        );
+        const { getWalletClient, publicClient } =
+          await import("../../src/lib/viemClient.js");
         const { getChainByKey } = await import("../../src/config/chain.js");
         const InfoFiMarketFactoryAbi = (
           await import("../../src/abis/InfoFiMarketFactoryAbi.js")
@@ -638,7 +694,7 @@ export default async function infoFiRoutes(fastify) {
             const wallet = getWalletClient(network);
 
             fastify.log.info(
-              `📡 Calling resolveSeasonMarkets(${seasonId}, ${winnerAddress})`
+              `📡 Calling resolveSeasonMarkets(${seasonId}, ${winnerAddress})`,
             );
 
             const hash = await wallet.writeContract({
@@ -662,7 +718,7 @@ export default async function infoFiRoutes(fastify) {
             };
 
             fastify.log.info(
-              `✅ Onchain resolution complete: ${receipt.status}`
+              `✅ Onchain resolution complete: ${receipt.status}`,
             );
           } catch (onchainError) {
             onchainResult = {
@@ -672,7 +728,7 @@ export default async function infoFiRoutes(fastify) {
             };
             fastify.log.error(
               { error: onchainError },
-              "Onchain resolution failed"
+              "Onchain resolution failed",
             );
           }
         }
@@ -735,7 +791,7 @@ export default async function infoFiRoutes(fastify) {
         if (posError) {
           fastify.log.error(
             { error: posError, marketId: market.id },
-            "Failed to fetch positions for market"
+            "Failed to fetch positions for market",
           );
         } else if (positions && positions.length > 0) {
           // Determine winning outcome: YES if player won, NO if player lost
@@ -767,7 +823,7 @@ export default async function infoFiRoutes(fastify) {
                 if (winError) {
                   fastify.log.error(
                     { error: winError, position: pos },
-                    "Failed to create winning entry"
+                    "Failed to create winning entry",
                   );
                 }
               }
@@ -786,7 +842,7 @@ export default async function infoFiRoutes(fastify) {
 
       fastify.log.info(
         { seasonId, winnerAddress, settled, total: markets.length },
-        "InfoFi markets settled"
+        "InfoFi markets settled",
       );
 
       return reply.send({

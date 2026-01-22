@@ -1,6 +1,6 @@
 // backend/shared/redisClient.js
-import Redis from 'ioredis';
-import process from 'node:process';
+import Redis from "ioredis";
+import process from "node:process";
 
 /**
  * Redis Client Singleton
@@ -31,21 +31,21 @@ class RedisClient {
    * Resolve Redis URL based on environment
    */
   getRedisUrl() {
-    const env = process.env.REDIS_ENV || process.env.NODE_ENV || 'local';
+    const env = process.env.REDIS_ENV || process.env.NODE_ENV || "local";
 
-    if (env === 'prod') {
-      return process.env.REDIS_URL_PROD || process.env.REDIS_URL || 'redis://localhost:6379';
+    if (env === "prod") {
+      return process.env.REDIS_URL_PROD;
     }
 
-    if (env === 'staging') {
-      return process.env.REDIS_URL_STAGING || process.env.REDIS_URL || 'redis://localhost:6379';
+    if (env === "staging") {
+      return process.env.REDIS_URL_STAGING;
     }
 
-    if (env === 'dev') {
-      return process.env.REDIS_URL_DEV || process.env.REDIS_URL || 'redis://localhost:6379';
+    if (env === "dev") {
+      return process.env.REDIS_URL_DEV;
     }
 
-    return process.env.REDIS_URL || 'redis://localhost:6379';
+    return process.env.REDIS_URL;
   }
 
   /**
@@ -57,11 +57,14 @@ class RedisClient {
     }
 
     const redisUrl = this.getRedisUrl();
+    if (!redisUrl) {
+      throw new Error("Redis URL not configured");
+    }
 
     try {
       this.client = new Redis(redisUrl, {
         // Enable TLS for production (Upstash uses rediss://)
-        tls: redisUrl.startsWith('rediss://') ? {} : undefined,
+        tls: redisUrl.startsWith("rediss://") ? {} : undefined,
         maxRetriesPerRequest: 3,
         retryStrategy(times) {
           const delay = Math.min(times * 50, 2000);
@@ -71,24 +74,24 @@ class RedisClient {
         enableReadyCheck: true,
       });
 
-      this.client.on('connect', () => {
-        this.getLogger().info('[Redis] Connected successfully');
+      this.client.on("connect", () => {
+        this.getLogger().info("[Redis] Connected successfully");
         this.isConnected = true;
       });
 
-      this.client.on('error', (err) => {
-        this.getLogger().error({ err }, '[Redis] Connection error');
+      this.client.on("error", (err) => {
+        this.getLogger().error({ err }, "[Redis] Connection error");
         this.isConnected = false;
       });
 
-      this.client.on('close', () => {
-        this.getLogger().info('[Redis] Connection closed');
+      this.client.on("close", () => {
+        this.getLogger().info("[Redis] Connection closed");
         this.isConnected = false;
       });
 
       return this.client;
     } catch (error) {
-      this.getLogger().error({ err: error }, '[Redis] Failed to initialize');
+      this.getLogger().error({ err: error }, "[Redis] Failed to initialize");
       throw error;
     }
   }
@@ -111,7 +114,7 @@ class RedisClient {
       await this.client.quit();
       this.client = null;
       this.isConnected = false;
-      this.getLogger().info('[Redis] Disconnected');
+      this.getLogger().info("[Redis] Disconnected");
     }
   }
 
@@ -122,9 +125,9 @@ class RedisClient {
     try {
       const client = this.getClient();
       const result = await client.ping();
-      return result === 'PONG';
+      return result === "PONG";
     } catch (error) {
-      this.getLogger().error({ err: error }, '[Redis] Ping failed');
+      this.getLogger().error({ err: error }, "[Redis] Ping failed");
       return false;
     }
   }
