@@ -31,11 +31,17 @@ export class AdminAlertService {
    */
   async recordFailure(fpmmAddress, functionName, error, attemptCount, logger) {
     try {
+      const safeLogger = logger || {
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        debug: () => {},
+      };
       // Increment failure count for this FPMM
       const currentFailures = (this.failureCount.get(fpmmAddress) || 0) + 1;
       this.failureCount.set(fpmmAddress, currentFailures);
 
-      logger.warn(
+      safeLogger.warn(
         `⚠️  Oracle failure recorded: ${fpmmAddress}, ` +
           `Function: ${functionName}, ` +
           `Failures: ${currentFailures}/${this.alertThreshold}`,
@@ -49,11 +55,15 @@ export class AdminAlertService {
           error,
           attemptCount,
           currentFailures,
-          logger,
+          safeLogger,
         );
       }
     } catch (alertError) {
-      logger.error(`❌ Error recording oracle failure: ${alertError.message}`);
+      if (logger?.error) {
+        logger.error(
+          `❌ Error recording oracle failure: ${alertError.message}`,
+        );
+      }
     }
   }
 
