@@ -13,9 +13,9 @@
 /**
  * AdminAlertService - Manages admin notifications for oracle failures
  */
-class AdminAlertService {
+export class AdminAlertService {
   constructor() {
-    this.alertThreshold = parseInt(process.env.ORACLE_ALERT_CUTOFF || '3', 10);
+    this.alertThreshold = parseInt(process.env.ORACLE_ALERT_CUTOFF || "3", 10);
     this.alertCooldown = 5 * 60 * 1000; // 5 minutes between alerts for same issue
     this.lastAlertTime = new Map(); // Track last alert time per FPMM address
     this.failureCount = new Map(); // Track consecutive failures per FPMM address
@@ -37,13 +37,20 @@ class AdminAlertService {
 
       logger.warn(
         `⚠️  Oracle failure recorded: ${fpmmAddress}, ` +
-        `Function: ${functionName}, ` +
-        `Failures: ${currentFailures}/${this.alertThreshold}`
+          `Function: ${functionName}, ` +
+          `Failures: ${currentFailures}/${this.alertThreshold}`,
       );
 
       // Check if we should send an alert
       if (currentFailures >= this.alertThreshold) {
-        await this.sendAlert(fpmmAddress, functionName, error, attemptCount, currentFailures, logger);
+        await this.sendAlert(
+          fpmmAddress,
+          functionName,
+          error,
+          attemptCount,
+          currentFailures,
+          logger,
+        );
       }
     } catch (alertError) {
       logger.error(`❌ Error recording oracle failure: ${alertError.message}`);
@@ -62,7 +69,7 @@ class AdminAlertService {
     if (previousFailures > 0) {
       logger.info(
         `✅ Oracle recovered: ${fpmmAddress}, ` +
-        `Previous failures: ${previousFailures}`
+          `Previous failures: ${previousFailures}`,
       );
     }
   }
@@ -77,7 +84,14 @@ class AdminAlertService {
    * @param {number} failureCount - Total consecutive failures
    * @param {object} logger - Logger instance
    */
-  async sendAlert(fpmmAddress, functionName, error, attemptCount, failureCount, logger) {
+  async sendAlert(
+    fpmmAddress,
+    functionName,
+    error,
+    attemptCount,
+    failureCount,
+    logger,
+  ) {
     try {
       // Check cooldown to avoid alert spam
       const lastAlert = this.lastAlertTime.get(fpmmAddress);
@@ -86,7 +100,7 @@ class AdminAlertService {
       if (lastAlert && now - lastAlert < this.alertCooldown) {
         logger.debug(
           `⏳ Alert cooldown active for ${fpmmAddress}, ` +
-          `next alert in ${Math.round((this.alertCooldown - (now - lastAlert)) / 1000)}s`
+            `next alert in ${Math.round((this.alertCooldown - (now - lastAlert)) / 1000)}s`,
         );
         return;
       }
@@ -96,20 +110,21 @@ class AdminAlertService {
 
       // Prepare alert message
       const alertMessage = {
-        severity: failureCount >= this.alertThreshold * 2 ? 'CRITICAL' : 'WARNING',
+        severity:
+          failureCount >= this.alertThreshold * 2 ? "CRITICAL" : "WARNING",
         timestamp: new Date().toISOString(),
         fpmmAddress,
         functionName,
         failureCount,
         attemptCount,
         errorMessage: error?.message || String(error),
-        errorCode: error?.code || 'UNKNOWN',
+        errorCode: error?.code || "UNKNOWN",
       };
 
       // Log alert
       logger.error(
         `🚨 ADMIN ALERT: Oracle call failed ${failureCount} times`,
-        alertMessage
+        alertMessage,
       );
 
       // TODO: Send to actual alert channels

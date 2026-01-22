@@ -18,7 +18,7 @@ import { adminAlertService } from "./adminAlertService.js";
 /**
  * OracleCallService - Manages all oracle contract interactions
  */
-class OracleCallService {
+export class OracleCallService {
   constructor() {
     // Get network from environment - NO FALLBACKS
     const network =
@@ -26,7 +26,7 @@ class OracleCallService {
 
     if (!network) {
       throw new Error(
-        "DEFAULT_NETWORK environment variable not set. Cannot initialize OracleCallService."
+        "DEFAULT_NETWORK environment variable not set. Cannot initialize OracleCallService.",
       );
     }
 
@@ -39,7 +39,7 @@ class OracleCallService {
       this.oracleAddress = process.env.INFOFI_ORACLE_ADDRESS_LOCAL;
     } else {
       throw new Error(
-        `Invalid DEFAULT_NETWORK value: ${network}. Must be LOCAL, TESTNET, or MAINNET.`
+        `Invalid DEFAULT_NETWORK value: ${network}. Must be LOCAL, TESTNET, or MAINNET.`,
       );
     }
 
@@ -67,7 +67,7 @@ class OracleCallService {
 
     if (raffleProbabilityBps < 0 || raffleProbabilityBps > 10000) {
       logger?.error(
-        `❌ Invalid probability ${raffleProbabilityBps} (must be 0-10000)`
+        `❌ Invalid probability ${raffleProbabilityBps} (must be 0-10000)`,
       );
       return { success: false, error: "Invalid probability basis points" };
     }
@@ -75,7 +75,7 @@ class OracleCallService {
     return this._callOracleWithRetry(
       "updateRaffleProbability",
       [fpmmAddress, BigInt(raffleProbabilityBps)],
-      logger
+      logger,
     );
   }
 
@@ -97,7 +97,7 @@ class OracleCallService {
 
     if (marketSentimentBps < 0 || marketSentimentBps > 10000) {
       logger?.error(
-        `❌ Invalid sentiment ${marketSentimentBps} (must be 0-10000)`
+        `❌ Invalid sentiment ${marketSentimentBps} (must be 0-10000)`,
       );
       return { success: false, error: "Invalid sentiment basis points" };
     }
@@ -105,7 +105,7 @@ class OracleCallService {
     return this._callOracleWithRetry(
       "updateMarketSentiment",
       [fpmmAddress, BigInt(marketSentimentBps)],
-      logger
+      logger,
     );
   }
 
@@ -166,7 +166,7 @@ class OracleCallService {
 
     if (!network) {
       logger?.error(
-        "❌ DEFAULT_NETWORK not set - cannot determine which network to use"
+        "❌ DEFAULT_NETWORK not set - cannot determine which network to use",
       );
       return {
         success: false,
@@ -194,20 +194,20 @@ class OracleCallService {
     logger?.info(`📝 Oracle call using account: ${accountAddress}`);
     if (!isCorrect) {
       logger?.error(
-        `❌ WRONG ACCOUNT! Expected ${expectedAddress}, got ${accountAddress}`
+        `❌ WRONG ACCOUNT! Expected ${expectedAddress}, got ${accountAddress}`,
       );
       logger?.error(
-        `❌ PRIVATE_KEY env var: ${process.env.PRIVATE_KEY ? "SET" : "NOT SET"}`
+        `❌ PRIVATE_KEY env var: ${process.env.PRIVATE_KEY ? "SET" : "NOT SET"}`,
       );
       logger?.error(
         `❌ PRIVATE_KEY_TESTNET env var: ${
           process.env.PRIVATE_KEY_TESTNET ? "SET" : "NOT SET"
-        }`
+        }`,
       );
       logger?.error(
         `❌ PRIVATE_KEY_MAINNET env var: ${
           process.env.PRIVATE_KEY_MAINNET ? "SET" : "NOT SET"
-        }`
+        }`,
       );
     }
 
@@ -217,7 +217,7 @@ class OracleCallService {
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
         logger?.info(
-          `📡 Oracle call attempt ${attempt}/${this.maxRetries}: ${functionName}(${args[0]}, ${args[1]})`
+          `📡 Oracle call attempt ${attempt}/${this.maxRetries}: ${functionName}(${args[0]}, ${args[1]})`,
         );
 
         const hash = await wallet.writeContract({
@@ -228,7 +228,7 @@ class OracleCallService {
         });
 
         logger?.info(
-          `✅ Oracle call succeeded: ${functionName} (hash: ${hash})`
+          `✅ Oracle call succeeded: ${functionName} (hash: ${hash})`,
         );
 
         // Record success and reset failure count
@@ -240,11 +240,11 @@ class OracleCallService {
             hash,
           });
           logger?.info(
-            `✅ Transaction confirmed: ${hash} (block: ${receipt.blockNumber})`
+            `✅ Transaction confirmed: ${hash} (block: ${receipt.blockNumber})`,
           );
         } catch (receiptError) {
           logger?.warn(
-            `⚠️  Could not confirm transaction receipt: ${receiptError.message}`
+            `⚠️  Could not confirm transaction receipt: ${receiptError.message}`,
           );
         }
 
@@ -252,13 +252,13 @@ class OracleCallService {
       } catch (error) {
         lastError = error;
         logger?.warn(
-          `⚠️  Oracle call failed (attempt ${attempt}/${this.maxRetries}): ${error.message}`
+          `⚠️  Oracle call failed (attempt ${attempt}/${this.maxRetries}): ${error.message}`,
         );
 
         // Check if we should alert admin
         if (attempt === this.alertCutoff) {
           logger?.error(
-            `🚨 ALERT: Oracle call failed ${this.alertCutoff} times. Will continue retrying but admin should be notified.`
+            `🚨 ALERT: Oracle call failed ${this.alertCutoff} times. Will continue retrying but admin should be notified.`,
           );
           // Record failure and potentially send alert
           adminAlertService.recordFailure(
@@ -266,7 +266,7 @@ class OracleCallService {
             functionName,
             error,
             attempt,
-            logger
+            logger,
           );
         }
 
@@ -283,7 +283,7 @@ class OracleCallService {
 
     // All retries exhausted
     logger?.error(
-      `❌ Oracle call failed after ${this.maxRetries} attempts: ${lastError?.message}`
+      `❌ Oracle call failed after ${this.maxRetries} attempts: ${lastError?.message}`,
     );
     return {
       success: false,
