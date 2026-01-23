@@ -3,11 +3,10 @@ import process from "node:process";
 
 // Supabase configuration
 const supabaseUrl = process.env.SUPABASE_URL || "";
-// Prefer service role key on the server; fall back to anon key
+// IMPORTANT: Backend requires service role key for DB writes.
+// Do not fall back to anon key, or writes can fail with permission errors (RLS / schema grants).
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "";
-const supabaseKey = supabaseServiceKey || supabaseAnonKey;
-export const hasSupabase = Boolean(supabaseUrl && supabaseKey);
+export const hasSupabase = Boolean(supabaseUrl && supabaseServiceKey);
 
 // Create Supabase client or a no-op stub for local dev without env
 function createStubResult(defaultData = []) {
@@ -17,17 +16,19 @@ function createStubResult(defaultData = []) {
     error: null,
     select: () => result,
     insert: () => result,
+    upsert: () => result,
     update: () => result,
     delete: () => result,
     eq: () => result,
     order: () => result,
     single: () => ({ data: null, error: null }),
+    maybeSingle: () => ({ data: null, error: { code: "PGRST116" } }),
   };
   return result;
 }
 
 export const supabase = hasSupabase
-  ? createClient(supabaseUrl, supabaseKey)
+  ? createClient(supabaseUrl, supabaseServiceKey)
   : {
       from: () => createStubResult([]),
     };
@@ -88,7 +89,7 @@ export class DatabaseService {
     const existing = await this.getInfoFiMarketByComposite(
       seasonId,
       playerAddress,
-      marketType
+      marketType,
     );
     return Boolean(existing);
   }
@@ -158,7 +159,7 @@ export class DatabaseService {
   async getInfoFiMarketBySeasonAndPlayer(
     seasonId,
     playerAddress,
-    marketType = "WINNER_PREDICTION"
+    marketType = "WINNER_PREDICTION",
   ) {
     // Normalize address to lowercase for case-insensitive comparison
     const normalizedAddress = playerAddress.toLowerCase();
@@ -204,7 +205,7 @@ export class DatabaseService {
         "Supabase not configured - missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY";
       this.getLogger().error(
         { err: new Error(error) },
-        "[supabaseClient] Configuration error"
+        "[supabaseClient] Configuration error",
       );
       throw new Error(error);
     }
@@ -212,7 +213,7 @@ export class DatabaseService {
     // Log incoming data for debugging
     this.getLogger().debug(
       { marketData },
-      "[supabaseClient] createInfoFiMarket called"
+      "[supabaseClient] createInfoFiMarket called",
     );
 
     // Validate required fields
@@ -221,7 +222,7 @@ export class DatabaseService {
       const error = `Missing required fields: season_id, player_address, or market_type`;
       this.getLogger().error(
         { marketData },
-        "[supabaseClient] Validation error"
+        "[supabaseClient] Validation error",
       );
       throw new Error(error);
     }
@@ -257,7 +258,7 @@ export class DatabaseService {
     }
 
     this.getLogger().info(
-      `[supabaseClient] Successfully created market: ${data.id}`
+      `[supabaseClient] Successfully created market: ${data.id}`,
     );
     return data;
   }
@@ -278,7 +279,7 @@ export class DatabaseService {
     seasonId,
     playerId,
     marketType,
-    newProbabilityBps
+    newProbabilityBps,
   ) {
     const { data, error } = await this.client
       .from("infofi_markets")
@@ -322,14 +323,14 @@ export class DatabaseService {
 
     // Reset the auto-increment sequence to start from 1
     const { error: seqError } = await this.client.rpc(
-      "reset_infofi_markets_sequence"
+      "reset_infofi_markets_sequence",
     );
     if (seqError && !seqError.message?.includes("does not exist")) {
       // Only throw if it's not a "function doesn't exist" error
       // (function might not be created yet in some environments)
       this.getLogger().debug(
         "[clearAllInfoFiMarkets] Could not reset sequence:",
-        seqError.message
+        seqError.message,
       );
     }
   }
@@ -365,7 +366,7 @@ export class DatabaseService {
   }) {
     if (!hasSupabase) {
       this.getLogger().warn(
-        "[supabaseClient] logFailedMarketAttempt called without Supabase config"
+        "[supabaseClient] logFailedMarketAttempt called without Supabase config",
       );
       return null;
     }
@@ -389,7 +390,7 @@ export class DatabaseService {
     if (error) {
       this.getLogger().error(
         { err: error },
-        "[supabaseClient] Failed to log failed market attempt"
+        "[supabaseClient] Failed to log failed market attempt",
       );
       return null;
     }
@@ -416,7 +417,7 @@ export class DatabaseService {
     if (error) {
       this.getLogger().error(
         { err: error },
-        "[supabaseClient] Failed to fetch failed market attempts"
+        "[supabaseClient] Failed to fetch failed market attempts",
       );
       throw new Error(error.message);
     }
@@ -429,7 +430,7 @@ export class DatabaseService {
     const { data, error } = await this.client
       .from("market_pricing_cache")
       .select(
-        "raffle_probability, market_sentiment, hybrid_price, last_updated"
+        "raffle_probability, market_sentiment, hybrid_price, last_updated",
       )
       .eq("market_id", marketId)
       .single();
@@ -698,7 +699,7 @@ export class DatabaseService {
         },
         {
           onConflict: "season_id",
-        }
+        },
       )
       .select()
       .single();
@@ -744,7 +745,7 @@ export class DatabaseService {
       const logger = this.getLogger();
       logger.error(
         `Failed to get or create player ID for ${playerAddress}:`,
-        error
+        error,
       );
       throw error;
     }
@@ -856,11 +857,11 @@ export class DatabaseService {
     seasonId,
     totalTickets,
     playerPositions,
-    maxSupply
+    maxSupply,
   ) {
     if (totalTickets === 0) {
       throw new Error(
-        `Cannot update probabilities: totalTickets is 0 for season ${seasonId}`
+        `Cannot update probabilities: totalTickets is 0 for season ${seasonId}`,
       );
     }
 
@@ -874,7 +875,7 @@ export class DatabaseService {
       for (const { player, ticketCount } of playerPositions) {
         // Calculate new probability in basis points
         const newProbabilityBps = Math.round(
-          (ticketCount * 10000) / totalTickets
+          (ticketCount * 10000) / totalTickets,
         );
 
         // Check if player meets 1% threshold
@@ -900,7 +901,7 @@ export class DatabaseService {
 
         if (error) {
           throw new Error(
-            `Failed to update market for ${player} in season ${seasonId}: ${error.message}`
+            `Failed to update market for ${player} in season ${seasonId}: ${error.message}`,
           );
         }
 
@@ -943,14 +944,14 @@ export class DatabaseService {
 
       if (error) {
         throw new Error(
-          `Failed to update contract address for ${playerAddress} in season ${seasonId}: ${error.message}`
+          `Failed to update contract address for ${playerAddress} in season ${seasonId}: ${error.message}`,
         );
       }
 
       return data;
     } catch (error) {
       throw new Error(
-        `Error updating market contract address: ${error.message}`
+        `Error updating market contract address: ${error.message}`,
       );
     }
   }
@@ -1001,7 +1002,7 @@ export class DatabaseService {
 
       if (error) {
         throw new Error(
-          `Failed to fetch active FPMM addresses: ${error.message}`
+          `Failed to fetch active FPMM addresses: ${error.message}`,
         );
       }
 
