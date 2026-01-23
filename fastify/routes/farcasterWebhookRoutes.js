@@ -13,22 +13,16 @@ import {
   addToAllowlist,
   removeFromAllowlist,
 } from "../../shared/allowlistService.js";
+import process from "node:process";
+import {
+  parseWebhookEvent,
+  verifyAppKeyWithNeynar,
+} from "@farcaster/miniapp-node";
 
-/**
- * Decode base64url encoded string to JSON
- * @param {string} str - Base64url encoded string
- * @returns {object} Decoded JSON object
- */
-function decodeBase64Url(str) {
-  // Replace base64url chars with base64 chars
-  let base64 = str.replace(/-/g, "+").replace(/_/g, "/");
-  // Add padding
-  while (base64.length % 4) {
-    base64 += "=";
-  }
-  // Decode
-  const decoded = Buffer.from(base64, "base64").toString("utf-8");
-  return JSON.parse(decoded);
+if (!process.env.NEYNAR_API_KEY) {
+  throw new Error(
+    "NEYNAR_API_KEY env var is required for Farcaster webhook verification",
+  );
 }
 
 /**
@@ -48,12 +42,12 @@ async function upsertNotificationToken(fastify, fid, appKey, url, token) {
       hasToken: !!token,
       hasSupabase,
     },
-    "[Farcaster Webhook] Attempting to upsert token"
+    "[Farcaster Webhook] Attempting to upsert token",
   );
 
   if (!hasSupabase) {
     fastify.log.warn(
-      "[Farcaster Webhook] Supabase not configured, skipping token storage"
+      "[Farcaster Webhook] Supabase not configured, skipping token storage",
     );
     return;
   }
@@ -71,18 +65,18 @@ async function upsertNotificationToken(fastify, fid, appKey, url, token) {
       },
       {
         onConflict: "fid,app_key",
-      }
+      },
     );
 
   if (error) {
     fastify.log.error(
       { error: error.message, errorCode: error.code, fid },
-      "[Farcaster Webhook] Failed to upsert notification token"
+      "[Farcaster Webhook] Failed to upsert notification token",
     );
   } else {
     fastify.log.info(
       { fid, appKey: appKey?.substring(0, 20), data },
-      "[Farcaster Webhook] Notification token stored"
+      "[Farcaster Webhook] Notification token stored",
     );
   }
 }
@@ -96,7 +90,7 @@ async function upsertNotificationToken(fastify, fid, appKey, url, token) {
 async function disableNotifications(fastify, fid, appKey) {
   if (!hasSupabase) {
     fastify.log.warn(
-      "[Farcaster Webhook] Supabase not configured, skipping notification disable"
+      "[Farcaster Webhook] Supabase not configured, skipping notification disable",
     );
     return;
   }
@@ -113,12 +107,12 @@ async function disableNotifications(fastify, fid, appKey) {
   if (error) {
     fastify.log.error(
       { error: error.message, fid, appKey },
-      "[Farcaster Webhook] Failed to disable notifications"
+      "[Farcaster Webhook] Failed to disable notifications",
     );
   } else {
     fastify.log.info(
       { fid, appKey: appKey?.substring(0, 20) },
-      "[Farcaster Webhook] Notifications disabled"
+      "[Farcaster Webhook] Notifications disabled",
     );
   }
 }
@@ -132,7 +126,7 @@ async function disableNotifications(fastify, fid, appKey) {
 async function deleteNotificationToken(fastify, fid, appKey) {
   if (!hasSupabase) {
     fastify.log.warn(
-      "[Farcaster Webhook] Supabase not configured, skipping token deletion"
+      "[Farcaster Webhook] Supabase not configured, skipping token deletion",
     );
     return;
   }
@@ -146,12 +140,12 @@ async function deleteNotificationToken(fastify, fid, appKey) {
   if (error) {
     fastify.log.error(
       { error: error.message, fid, appKey },
-      "[Farcaster Webhook] Failed to delete notification token"
+      "[Farcaster Webhook] Failed to delete notification token",
     );
   } else {
     fastify.log.info(
       { fid, appKey: appKey?.substring(0, 20) },
-      "[Farcaster Webhook] Notification token deleted"
+      "[Farcaster Webhook] Notification token deleted",
     );
   }
 }
@@ -171,35 +165,49 @@ async function farcasterWebhookRoutes(fastify) {
     fastify.log.info({ raw: body }, "[Farcaster Webhook] Received");
 
     try {
+      if (!body?.header || !body?.payload || !body?.signature) {
+        fastify.log.warn(
+          { hasHeader: !!body?.header, hasPayload: !!body?.payload },
+          "[Farcaster Webhook] Unverified webhook payload format - ignoring",
+        );
+        return reply.send({ success: true });
+      }
+
       let event, fid, appKey, notificationDetails;
 
-      // Check if this is a signed payload (has header + payload fields)
-      if (body.header && body.payload) {
-        // Signed format - decode the base64url encoded parts
-        const headerData = decodeBase64Url(body.header);
-        const payloadData = decodeBase64Url(body.payload);
+      try {
+        const verified = await parseWebhookEvent(body, verifyAppKeyWithNeynar);
 
-        fastify.log.info({ header: headerData }, "[Farcaster Webhook] Header");
-        fastify.log.info(
-          { payload: payloadData },
-          "[Farcaster Webhook] Payload"
+        fid = verified?.header?.fid;
+        appKey = verified?.header?.key;
+        event = verified?.payload?.event;
+        notificationDetails = verified?.payload?.notificationDetails;
+      } catch (e) {
+        const error = e;
+        const errorName =
+          error && typeof error === "object" && "name" in error
+            ? String(error.name)
+            : "Unknown";
+
+        fastify.log.warn(
+          { errorName },
+          "[Farcaster Webhook] Signature verification failed - ignoring",
         );
 
-        fid = headerData.fid;
-        appKey = headerData.key; // Client's app key - unique per client
-        event = payloadData.event;
-        notificationDetails = payloadData.notificationDetails;
-      } else {
-        // Direct format (for testing or legacy)
-        event = body.event;
-        fid = body.fid;
-        appKey = body.appKey || "unknown";
-        notificationDetails = body.notificationDetails;
+        return reply.send({ success: true });
+      }
+
+      if (!fid || !event) {
+        fastify.log.warn(
+          { fid, event },
+          "[Farcaster Webhook] Verified payload missing required fields - ignoring",
+        );
+        return reply.send({ success: true });
       }
 
       fastify.log.info(
         { event, fid, hasNotifications: !!notificationDetails },
-        "[Farcaster Webhook] Parsed"
+        "[Farcaster Webhook] Parsed",
       );
 
       // Handle different event types
@@ -213,7 +221,7 @@ async function farcasterWebhookRoutes(fastify) {
               appKey: appKey?.substring(0, 20),
               hasNotifications: !!notificationDetails,
             },
-            "[Farcaster Webhook] User added app"
+            "[Farcaster Webhook] User added app",
           );
           // Store notification token if provided
           if (notificationDetails?.url && notificationDetails?.token) {
@@ -222,7 +230,7 @@ async function farcasterWebhookRoutes(fastify) {
               fid,
               appKey,
               notificationDetails.url,
-              notificationDetails.token
+              notificationDetails.token,
             );
           }
           // Add user to allowlist (respects time-gate)
@@ -231,18 +239,18 @@ async function farcasterWebhookRoutes(fastify) {
             if (allowlistResult.success) {
               fastify.log.info(
                 { fid, wallet: allowlistResult.entry?.wallet_address },
-                "[Farcaster Webhook] User added to allowlist"
+                "[Farcaster Webhook] User added to allowlist",
               );
             } else {
               fastify.log.info(
                 { fid, reason: allowlistResult.error },
-                "[Farcaster Webhook] User not added to allowlist"
+                "[Farcaster Webhook] User not added to allowlist",
               );
             }
           } catch (allowlistError) {
             fastify.log.warn(
               { error: allowlistError.message, fid },
-              "[Farcaster Webhook] Failed to add user to allowlist"
+              "[Farcaster Webhook] Failed to add user to allowlist",
             );
           }
           break;
@@ -251,18 +259,36 @@ async function farcasterWebhookRoutes(fastify) {
         case "miniapp_removed":
           fastify.log.info(
             { fid, appKey: appKey?.substring(0, 20) },
-            "[Farcaster Webhook] User removed app"
+            "[Farcaster Webhook] User removed app",
           );
           // Delete notification token for this specific client only
           await deleteNotificationToken(fastify, fid, appKey);
-          // Note: We do NOT remove from allowlist when app is removed
-          // Once allowlisted, users stay allowlisted (soft delete can be done manually)
+          // Revoke allowlist access when app is removed
+          try {
+            const removeResult = await removeFromAllowlist(fid);
+            if (removeResult.success) {
+              fastify.log.info(
+                { fid },
+                "[Farcaster Webhook] User removed from allowlist",
+              );
+            } else {
+              fastify.log.warn(
+                { fid, error: removeResult.error },
+                "[Farcaster Webhook] Failed to remove user from allowlist",
+              );
+            }
+          } catch (removeError) {
+            fastify.log.warn(
+              { fid, error: removeError?.message },
+              "[Farcaster Webhook] Error removing user from allowlist",
+            );
+          }
           break;
 
         case "notifications_enabled":
           fastify.log.info(
             { fid, appKey: appKey?.substring(0, 20) },
-            "[Farcaster Webhook] User enabled notifications"
+            "[Farcaster Webhook] User enabled notifications",
           );
           // Store/update notification token
           if (notificationDetails?.url && notificationDetails?.token) {
@@ -271,7 +297,7 @@ async function farcasterWebhookRoutes(fastify) {
               fid,
               appKey,
               notificationDetails.url,
-              notificationDetails.token
+              notificationDetails.token,
             );
           }
           break;
@@ -279,7 +305,7 @@ async function farcasterWebhookRoutes(fastify) {
         case "notifications_disabled":
           fastify.log.info(
             { fid, appKey: appKey?.substring(0, 20) },
-            "[Farcaster Webhook] User disabled notifications"
+            "[Farcaster Webhook] User disabled notifications",
           );
           // Mark notifications as disabled for this specific client only
           await disableNotifications(fastify, fid, appKey);
@@ -294,7 +320,7 @@ async function farcasterWebhookRoutes(fastify) {
     } catch (error) {
       fastify.log.error(
         { error: error.message },
-        "[Farcaster Webhook] Error processing webhook"
+        "[Farcaster Webhook] Error processing webhook",
       );
       // Still return 200 to not block the add operation
       return reply.send({ success: true });

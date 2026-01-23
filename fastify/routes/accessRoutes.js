@@ -13,8 +13,11 @@ import {
   ACCESS_LEVELS,
   ACCESS_LEVEL_NAMES,
 } from "../../shared/accessService.js";
+import { createRequireAdmin } from "../../shared/adminGuard.js";
 
 export default async function accessRoutes(fastify) {
+  const requireAdmin = createRequireAdmin();
+
   /**
    * GET /check
    * Check if a user is allowlisted and get their access info
@@ -61,12 +64,6 @@ export default async function accessRoutes(fastify) {
     if (!route) {
       return reply.code(400).send({
         error: "route parameter is required",
-      });
-    }
-
-    if (!fid && !wallet) {
-      return reply.code(400).send({
-        error: "Either fid or wallet parameter is required",
       });
     }
 
@@ -136,42 +133,45 @@ export default async function accessRoutes(fastify) {
    * Update a user's access level (admin only)
    * Body: { fid: number, accessLevel: number }
    */
-  fastify.post("/set-access-level", async (request, reply) => {
-    // TODO: Add admin authentication check
-    const { fid, accessLevel } = request.body;
+  fastify.post(
+    "/set-access-level",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const { fid, accessLevel } = request.body;
 
-    if (!fid || accessLevel === undefined) {
-      return reply.code(400).send({
-        error: "fid and accessLevel are required",
-      });
-    }
-
-    if (accessLevel < 0 || accessLevel > 4) {
-      return reply.code(400).send({
-        error: "accessLevel must be between 0 and 4",
-      });
-    }
-
-    try {
-      const result = await setUserAccessLevel(fid, accessLevel);
-
-      if (!result.success) {
+      if (!fid || accessLevel === undefined) {
         return reply.code(400).send({
-          error: result.error || "Failed to set access level",
+          error: "fid and accessLevel are required",
         });
       }
 
-      return {
-        success: true,
-        entry: result.entry,
-      };
-    } catch (error) {
-      fastify.log.error("Error setting user access level:", error);
-      return reply.code(500).send({
-        error: "Failed to set user access level",
-      });
-    }
-  });
+      if (accessLevel < 0 || accessLevel > 4) {
+        return reply.code(400).send({
+          error: "accessLevel must be between 0 and 4",
+        });
+      }
+
+      try {
+        const result = await setUserAccessLevel(fid, accessLevel);
+
+        if (!result.success) {
+          return reply.code(400).send({
+            error: result.error || "Failed to set access level",
+          });
+        }
+
+        return {
+          success: true,
+          entry: result.entry,
+        };
+      } catch (error) {
+        fastify.log.error("Error setting user access level:", error);
+        return reply.code(500).send({
+          error: "Failed to set user access level",
+        });
+      }
+    },
+  );
 
   /**
    * GET /default-level
@@ -198,43 +198,46 @@ export default async function accessRoutes(fastify) {
    * Set the default access level for new entries (admin only)
    * Body: { level: number }
    */
-  fastify.post("/set-default-level", async (request, reply) => {
-    // TODO: Add admin authentication check
-    const { level } = request.body;
+  fastify.post(
+    "/set-default-level",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const { level } = request.body;
 
-    if (level === undefined) {
-      return reply.code(400).send({
-        error: "level is required",
-      });
-    }
-
-    if (level < 0 || level > 4) {
-      return reply.code(400).send({
-        error: "level must be between 0 and 4",
-      });
-    }
-
-    try {
-      const result = await setDefaultAccessLevel(level);
-
-      if (!result.success) {
+      if (level === undefined) {
         return reply.code(400).send({
-          error: result.error || "Failed to set default level",
+          error: "level is required",
         });
       }
 
-      return {
-        success: true,
-        level,
-        levelName: ACCESS_LEVEL_NAMES[level],
-      };
-    } catch (error) {
-      fastify.log.error("Error setting default access level:", error);
-      return reply.code(500).send({
-        error: "Failed to set default access level",
-      });
-    }
-  });
+      if (level < 0 || level > 4) {
+        return reply.code(400).send({
+          error: "level must be between 0 and 4",
+        });
+      }
+
+      try {
+        const result = await setDefaultAccessLevel(level);
+
+        if (!result.success) {
+          return reply.code(400).send({
+            error: result.error || "Failed to set default level",
+          });
+        }
+
+        return {
+          success: true,
+          level,
+          levelName: ACCESS_LEVEL_NAMES[level],
+        };
+      } catch (error) {
+        fastify.log.error("Error setting default access level:", error);
+        return reply.code(500).send({
+          error: "Failed to set default access level",
+        });
+      }
+    },
+  );
 
   /**
    * GET /levels

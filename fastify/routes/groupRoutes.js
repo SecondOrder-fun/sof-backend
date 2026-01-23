@@ -15,43 +15,49 @@ import {
   getGroupMembers,
   isUserInGroup,
 } from "../../shared/groupService.js";
+import { createRequireAdmin } from "../../shared/adminGuard.js";
 
 export default async function groupRoutes(fastify) {
+  const requireAdmin = createRequireAdmin();
+
   /**
    * POST /groups
    * Create a new access group (admin only)
    * Body: { slug: string, name: string, description?: string }
    */
-  fastify.post("/groups", async (request, reply) => {
-    // TODO: Add admin authentication check
-    const { slug, name, description } = request.body;
+  fastify.post(
+    "/groups",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const { slug, name, description } = request.body;
 
-    if (!slug || !name) {
-      return reply.code(400).send({
-        error: "slug and name are required",
-      });
-    }
-
-    try {
-      const result = await createGroup({ slug, name, description });
-
-      if (!result.success) {
+      if (!slug || !name) {
         return reply.code(400).send({
-          error: result.error || "Failed to create group",
+          error: "slug and name are required",
         });
       }
 
-      return {
-        success: true,
-        group: result.group,
-      };
-    } catch (error) {
-      fastify.log.error("Error creating group:", error);
-      return reply.code(500).send({
-        error: "Failed to create group",
-      });
-    }
-  });
+      try {
+        const result = await createGroup({ slug, name, description });
+
+        if (!result.success) {
+          return reply.code(400).send({
+            error: result.error || "Failed to create group",
+          });
+        }
+
+        return {
+          success: true,
+          group: result.group,
+        };
+      } catch (error) {
+        fastify.log.error("Error creating group:", error);
+        return reply.code(500).send({
+          error: "Failed to create group",
+        });
+      }
+    },
+  );
 
   /**
    * GET /groups
@@ -105,138 +111,150 @@ export default async function groupRoutes(fastify) {
    * Update a group (admin only)
    * Body: { name?: string, description?: string, isActive?: boolean }
    */
-  fastify.patch("/groups/:slug", async (request, reply) => {
-    // TODO: Add admin authentication check
-    const { slug } = request.params;
-    const updates = request.body;
+  fastify.patch(
+    "/groups/:slug",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const { slug } = request.params;
+      const updates = request.body;
 
-    if (Object.keys(updates).length === 0) {
-      return reply.code(400).send({
-        error: "No updates provided",
-      });
-    }
-
-    try {
-      const result = await updateGroup(slug, updates);
-
-      if (!result.success) {
+      if (Object.keys(updates).length === 0) {
         return reply.code(400).send({
-          error: result.error || "Failed to update group",
+          error: "No updates provided",
         });
       }
 
-      return {
-        success: true,
-        group: result.group,
-      };
-    } catch (error) {
-      fastify.log.error("Error updating group:", error);
-      return reply.code(500).send({
-        error: "Failed to update group",
-      });
-    }
-  });
+      try {
+        const result = await updateGroup(slug, updates);
+
+        if (!result.success) {
+          return reply.code(400).send({
+            error: result.error || "Failed to update group",
+          });
+        }
+
+        return {
+          success: true,
+          group: result.group,
+        };
+      } catch (error) {
+        fastify.log.error("Error updating group:", error);
+        return reply.code(500).send({
+          error: "Failed to update group",
+        });
+      }
+    },
+  );
 
   /**
    * DELETE /groups/:slug
    * Delete a group (soft delete) (admin only)
    */
-  fastify.delete("/groups/:slug", async (request, reply) => {
-    // TODO: Add admin authentication check
-    const { slug } = request.params;
+  fastify.delete(
+    "/groups/:slug",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const { slug } = request.params;
 
-    try {
-      const result = await deleteGroup(slug);
+      try {
+        const result = await deleteGroup(slug);
 
-      if (!result.success) {
-        return reply.code(400).send({
-          error: result.error || "Failed to delete group",
+        if (!result.success) {
+          return reply.code(400).send({
+            error: result.error || "Failed to delete group",
+          });
+        }
+
+        return {
+          success: true,
+        };
+      } catch (error) {
+        fastify.log.error("Error deleting group:", error);
+        return reply.code(500).send({
+          error: "Failed to delete group",
         });
       }
-
-      return {
-        success: true,
-      };
-    } catch (error) {
-      fastify.log.error("Error deleting group:", error);
-      return reply.code(500).send({
-        error: "Failed to delete group",
-      });
-    }
-  });
+    },
+  );
 
   /**
    * POST /groups/assign
    * Add user to a group (admin only)
    * Body: { fid: number, groupSlug: string, expiresAt?: string, grantedBy?: string }
    */
-  fastify.post("/groups/assign", async (request, reply) => {
-    // TODO: Add admin authentication check
-    const { fid, groupSlug, expiresAt, grantedBy } = request.body;
+  fastify.post(
+    "/groups/assign",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const { fid, groupSlug, expiresAt, grantedBy } = request.body;
 
-    if (!fid || !groupSlug) {
-      return reply.code(400).send({
-        error: "fid and groupSlug are required",
-      });
-    }
-
-    try {
-      const result = await addUserToGroup(fid, groupSlug, {
-        expiresAt,
-        grantedBy,
-      });
-
-      if (!result.success) {
+      if (!fid || !groupSlug) {
         return reply.code(400).send({
-          error: result.error || "Failed to add user to group",
+          error: "fid and groupSlug are required",
         });
       }
 
-      return {
-        success: true,
-      };
-    } catch (error) {
-      fastify.log.error("Error adding user to group:", error);
-      return reply.code(500).send({
-        error: "Failed to add user to group",
-      });
-    }
-  });
+      try {
+        const result = await addUserToGroup(fid, groupSlug, {
+          expiresAt,
+          grantedBy,
+        });
+
+        if (!result.success) {
+          return reply.code(400).send({
+            error: result.error || "Failed to add user to group",
+          });
+        }
+
+        return {
+          success: true,
+        };
+      } catch (error) {
+        fastify.log.error("Error adding user to group:", error);
+        return reply.code(500).send({
+          error: "Failed to add user to group",
+        });
+      }
+    },
+  );
 
   /**
    * POST /groups/remove
    * Remove user from a group (admin only)
    * Body: { fid: number, groupSlug: string }
    */
-  fastify.post("/groups/remove", async (request, reply) => {
-    // TODO: Add admin authentication check
-    const { fid, groupSlug } = request.body;
+  fastify.post(
+    "/groups/remove",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const { fid, groupSlug } = request.body;
 
-    if (!fid || !groupSlug) {
-      return reply.code(400).send({
-        error: "fid and groupSlug are required",
-      });
-    }
-
-    try {
-      const result = await removeUserFromGroup(fid, groupSlug);
-
-      if (!result.success) {
+      if (!fid || !groupSlug) {
         return reply.code(400).send({
-          error: result.error || "Failed to remove user from group",
+          error: "fid and groupSlug are required",
         });
       }
 
-      return {
-        success: true,
-      };
-    } catch (error) {
-      fastify.log.error("Error removing user from group:", error);
-      return reply.code(500).send({
-        error: "Failed to remove user from group",
-      });
-    }
-  });
+      try {
+        const result = await removeUserFromGroup(fid, groupSlug);
+
+        if (!result.success) {
+          return reply.code(400).send({
+            error: result.error || "Failed to remove user from group",
+          });
+        }
+
+        return {
+          success: true,
+        };
+      } catch (error) {
+        fastify.log.error("Error removing user from group:", error);
+        return reply.code(500).send({
+          error: "Failed to remove user from group",
+        });
+      }
+    },
+  );
 
   /**
    * GET /groups/:slug/members

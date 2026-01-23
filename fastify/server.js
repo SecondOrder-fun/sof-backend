@@ -15,9 +15,13 @@ import raffleAbi from "../src/abis/RaffleAbi.js";
 import sofBondingCurveAbi from "../src/abis/SOFBondingCurveAbi.js";
 import infoFiMarketFactoryAbi from "../src/abis/InfoFiMarketFactoryAbi.js";
 import simpleFpmmAbi from "../src/abis/SimpleFPMMAbi.js";
+import { authenticateFastify } from "../shared/auth.js";
 
 // Create Fastify instance
 const app = fastify({ logger: true });
+
+// Attach JWT authentication parsing (public endpoints still allowed)
+await authenticateFastify(app);
 
 // Select network ("LOCAL" or "TESTNET") for on-chain listeners
 // Respect DEFAULT_NETWORK from .env, with LOCAL as final fallback
@@ -51,7 +55,7 @@ if (corsOriginsEnv && corsOriginsEnv.trim().length > 0) {
 } else {
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "CORS_ORIGIN is required in production. Set a comma-separated allowlist of origins."
+      "CORS_ORIGIN is required in production. Set a comma-separated allowlist of origins.",
     );
   }
 
@@ -78,7 +82,7 @@ app.addHook("onRoute", (routeOptions) => {
       : routeOptions.method;
     app.log.info(
       { method: methods, url: routeOptions.url, prefix: routeOptions.prefix },
-      "route added"
+      "route added",
     );
   } catch (e) {
     app.log.error({ e }, "Failed to log route");
@@ -97,12 +101,10 @@ try {
 
 try {
   await app.register(
-    (
-      await import("./routes/farcasterWebhookRoutes.js")
-    ).default,
+    (await import("./routes/farcasterWebhookRoutes.js")).default,
     {
       prefix: "/api",
-    }
+    },
   );
   app.log.info("Mounted /api/webhook/farcaster");
 } catch (err) {
@@ -147,12 +149,10 @@ try {
 
 try {
   await app.register(
-    (
-      await import("./routes/raffleTransactionRoutes.js")
-    ).default,
+    (await import("./routes/raffleTransactionRoutes.js")).default,
     {
       prefix: "/api/raffle",
-    }
+    },
   );
   app.log.info("Mounted /api/raffle");
 } catch (err) {
@@ -247,7 +247,7 @@ async function startListeners() {
 
     if (!raffleAddress) {
       app.log.warn(
-        `⚠️  Raffle address env not set for NETWORK=${NETWORK} - SeasonStarted listener will not start`
+        `⚠️  Raffle address env not set for NETWORK=${NETWORK} - SeasonStarted listener will not start`,
       );
       return;
     }
@@ -258,7 +258,7 @@ async function startListeners() {
 
       try {
         app.log.info(
-          `🎧 Starting PositionUpdate listener for season ${seasonId}`
+          `🎧 Starting PositionUpdate listener for season ${seasonId}`,
         );
 
         const unwatch = await startPositionUpdateListener(
@@ -268,17 +268,17 @@ async function startListeners() {
           raffleAbi,
           raffleTokenAddress,
           infoFiFactoryAddress,
-          app.log
+          app.log,
         );
 
         // Store unwatch function for cleanup
         positionUpdateListeners.set(seasonId, unwatch);
         app.log.info(
-          `✅ PositionUpdate listener started for season ${seasonId}`
+          `✅ PositionUpdate listener started for season ${seasonId}`,
         );
       } catch (error) {
         app.log.error(
-          `❌ Failed to start PositionUpdate listener for season ${seasonId}: ${error.message}`
+          `❌ Failed to start PositionUpdate listener for season ${seasonId}: ${error.message}`,
         );
       }
     };
@@ -312,14 +312,14 @@ async function startListeners() {
       raffleAddress,
       raffleAbi,
       app.log,
-      onSeasonCreated
+      onSeasonCreated,
     );
 
     // Start SeasonCompleted listener (marks seasons as inactive when they end)
     unwatchSeasonCompleted = await startSeasonCompletedListener(
       raffleAddress,
       raffleAbi,
-      app.log
+      app.log,
     );
 
     // Resolve InfoFi factory address based on NETWORK (already computed above)
@@ -329,12 +329,12 @@ async function startListeners() {
         unwatchMarketCreated = await startMarketCreatedListener(
           infoFiFactoryAddress,
           infoFiMarketFactoryAbi,
-          app.log
+          app.log,
         );
         app.log.info("✅ MarketCreated listener started");
       } catch (error) {
         app.log.error(
-          `❌ Failed to start MarketCreated listener: ${error.message}`
+          `❌ Failed to start MarketCreated listener: ${error.message}`,
         );
       }
     } else {
@@ -342,7 +342,7 @@ async function startListeners() {
       app.log.error(
         "No INFOFI_MARKET_FACTORY contract configured (INFOFI_FACTORY_ADDRESS_" +
           (NETWORK === "TESTNET" ? "TESTNET" : "LOCAL") +
-          ") - MarketCreated listener will not start"
+          ") - MarketCreated listener will not start",
       );
     }
 
@@ -355,13 +355,13 @@ async function startListeners() {
 
         if (activeFpmmAddresses && activeFpmmAddresses.length > 0) {
           app.log.info(
-            `Found ${activeFpmmAddresses.length} active FPMM contract(s)`
+            `Found ${activeFpmmAddresses.length} active FPMM contract(s)`,
           );
 
           const unwatchFunctions = await startTradeListener(
             activeFpmmAddresses,
             simpleFpmmAbi,
-            app.log
+            app.log,
           );
 
           // Store unwatch functions for cleanup
@@ -370,11 +370,11 @@ async function startListeners() {
           });
 
           app.log.info(
-            `✅ Trade listeners started for ${activeFpmmAddresses.length} FPMM contract(s)`
+            `✅ Trade listeners started for ${activeFpmmAddresses.length} FPMM contract(s)`,
           );
         } else {
           app.log.info(
-            "No active FPMM contracts found - Trade listeners not started"
+            "No active FPMM contracts found - Trade listeners not started",
           );
         }
       } catch (error) {
@@ -402,7 +402,7 @@ async function syncHistoricalPositions() {
         `✅ Historical sync complete: ${result.totalRecorded} new positions recorded, ` +
           `${result.totalSkipped} already synced, ${
             result.totalErrors || 0
-          } errors`
+          } errors`,
       );
 
       if (result.details && result.details.length > 0) {
@@ -432,25 +432,24 @@ async function syncHistoricalTransactions() {
 
     if (!bondingCurveAddress) {
       app.log.warn(
-        "⚠️  No bonding curve address configured, skipping transaction sync"
+        "⚠️  No bonding curve address configured, skipping transaction sync",
       );
       return;
     }
 
-    const results = await raffleTransactionService.syncAllActiveSeasons(
-      bondingCurveAddress
-    );
+    const results =
+      await raffleTransactionService.syncAllActiveSeasons(bondingCurveAddress);
 
     const totalRecorded = results.reduce(
       (sum, r) => sum + (r.recorded || 0),
-      0
+      0,
     );
     const totalSkipped = results.reduce((sum, r) => sum + (r.skipped || 0), 0);
     const totalErrors = results.reduce((sum, r) => sum + (r.errors || 0), 0);
 
     app.log.info(
       `✅ Historical transaction sync complete: ${totalRecorded} new transactions, ` +
-        `${totalSkipped} already synced, ${totalErrors} errors`
+        `${totalSkipped} already synced, ${totalErrors} errors`,
     );
 
     if (results.length > 0) {
