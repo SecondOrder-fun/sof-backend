@@ -425,20 +425,7 @@ async function syncHistoricalTransactions() {
   try {
     app.log.info("🎫 Starting historical transaction sync...");
 
-    // Get bonding curve address from environment
-    const bondingCurveAddress =
-      process.env[`BONDING_CURVE_ADDRESS_${NETWORK}`] ||
-      process.env.BONDING_CURVE_ADDRESS_TESTNET;
-
-    if (!bondingCurveAddress) {
-      app.log.warn(
-        "⚠️  No bonding curve address configured, skipping transaction sync",
-      );
-      return;
-    }
-
-    const results =
-      await raffleTransactionService.syncAllActiveSeasons(bondingCurveAddress);
+    const results = await raffleTransactionService.syncAllActiveSeasons();
 
     const totalRecorded = results.reduce(
       (sum, r) => sum + (r.recorded || 0),

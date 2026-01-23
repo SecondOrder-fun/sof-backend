@@ -26,7 +26,7 @@ class RaffleTransactionService {
       // eslint-disable-next-line no-console
       console.warn(
         `Partition creation attempt for season ${seasonId}:`,
-        err.message
+        err.message,
       );
     }
   }
@@ -95,7 +95,7 @@ class RaffleTransactionService {
   async syncSeasonTransactions(
     seasonId,
     bondingCurveAddress,
-    fromBlock = null
+    fromBlock = null,
   ) {
     try {
       // Get season's last synced block
@@ -126,7 +126,7 @@ class RaffleTransactionService {
 
       // Get PositionUpdate event definition
       const positionUpdateEvent = SOFBondingCurveAbi.find(
-        (item) => item.type === "event" && item.name === "PositionUpdate"
+        (item) => item.type === "event" && item.name === "PositionUpdate",
       );
 
       if (!positionUpdateEvent) {
@@ -146,12 +146,12 @@ class RaffleTransactionService {
           fromBlock: startBlock,
           toBlock: latestBlock,
         },
-        10000n // 10k block chunks
+        10000n, // 10k block chunks
       );
 
       // Filter logs for this season
       const seasonLogs = logs.filter(
-        (log) => Number(log.args.seasonId) === seasonId
+        (log) => Number(log.args.seasonId) === seasonId,
       );
 
       let recorded = 0;
@@ -190,7 +190,7 @@ class RaffleTransactionService {
             txHash: log.transactionHash,
             blockNumber: Number(log.blockNumber),
             blockTimestamp: new Date(
-              Number(block.timestamp) * 1000
+              Number(block.timestamp) * 1000,
             ).toISOString(),
             ticketsBefore: oldTicketsNum,
             ticketsAfter: newTicketsNum,
@@ -205,7 +205,7 @@ class RaffleTransactionService {
           // eslint-disable-next-line no-console
           console.error(
             `Failed to record tx ${log.transactionHash}:`,
-            error.message
+            error.message,
           );
           errors++;
         }
@@ -241,7 +241,7 @@ class RaffleTransactionService {
   /**
    * Sync all active seasons
    */
-  async syncAllActiveSeasons(bondingCurveAddress) {
+  async syncAllActiveSeasons() {
     const { data: seasons } = await db.client
       .from("season_contracts")
       .select("season_id, bonding_curve_address")
@@ -249,10 +249,21 @@ class RaffleTransactionService {
 
     const results = [];
     for (const season of seasons || []) {
-      const curveAddress = season.bonding_curve_address || bondingCurveAddress;
+      const curveAddress = season.bonding_curve_address;
+      if (!curveAddress) {
+        results.push({
+          seasonId: season.season_id,
+          success: false,
+          recorded: 0,
+          skipped: 0,
+          errors: 1,
+          error: "bonding_curve_address not set for season",
+        });
+        continue;
+      }
       const result = await this.syncSeasonTransactions(
         season.season_id,
-        curveAddress
+        curveAddress,
       );
       results.push({ seasonId: season.season_id, ...result });
     }

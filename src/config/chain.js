@@ -14,7 +14,7 @@ export function loadChainEnv() {
     if (isRequired && !value) {
       throw new Error(
         `Missing required environment variable: ${key} for ${networkName}. ` +
-          `Set this in your .env file or Railway environment variables.`
+          `Set this in your .env file or Railway environment variables.`,
       );
     }
 
@@ -28,7 +28,6 @@ export function loadChainEnv() {
       rpcUrl: process.env.RPC_URL_LOCAL || "http://127.0.0.1:8545",
       raffle: process.env.RAFFLE_ADDRESS_LOCAL || "",
       sof: process.env.SOF_ADDRESS_LOCAL || "",
-      curve: process.env.CURVE_ADDRESS_LOCAL || "",
       infofiFactory: process.env.INFOFI_FACTORY_ADDRESS_LOCAL || "",
       // InfoFi on-chain hybrid price oracle (required for SSE transport)
       infofiOracle: process.env.INFOFI_ORACLE_ADDRESS_LOCAL || "",
@@ -87,7 +86,7 @@ export function loadChainEnv() {
     // Log warning rather than crash; healthcheck will surface failures
     // eslint-disable-next-line no-console
     console.warn(
-      `[chain] Missing required env for ${defaultNet}: ${missing.join(", ")}`
+      `[chain] Missing required env for ${defaultNet}: ${missing.join(", ")}`,
     );
   }
 
@@ -109,7 +108,7 @@ export function getChainByKey(key) {
   if (!defaultNet && !key) {
     throw new Error(
       "DEFAULT_NETWORK environment variable not set and no network key provided. " +
-        "Set DEFAULT_NETWORK in your .env file or Railway environment variables."
+        "Set DEFAULT_NETWORK in your .env file or Railway environment variables.",
     );
   }
 
@@ -118,7 +117,7 @@ export function getChainByKey(key) {
 
   if (!chain) {
     throw new Error(
-      `Invalid network: ${k}. Must be LOCAL, TESTNET, or MAINNET.`
+      `Invalid network: ${k}. Must be LOCAL, TESTNET, or MAINNET.`,
     );
   }
 
@@ -126,7 +125,7 @@ export function getChainByKey(key) {
   if (!chain.rpcUrl && k !== "LOCAL") {
     throw new Error(
       `Missing RPC_URL_${k} environment variable. ` +
-        `Set this in your .env file or Railway environment variables.`
+        `Set this in your .env file or Railway environment variables.`,
     );
   }
 
