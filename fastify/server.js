@@ -10,7 +10,6 @@ import { startPositionUpdateListener } from "../src/listeners/positionUpdateList
 import { startMarketCreatedListener } from "../src/listeners/marketCreatedListener.js";
 import { startTradeListener } from "../src/listeners/tradeListener.js";
 import { infoFiPositionService } from "../src/services/infoFiPositionService.js";
-import { raffleTransactionService } from "../src/services/raffleTransactionService.js";
 import raffleAbi from "../src/abis/RaffleAbi.js";
 import sofBondingCurveAbi from "../src/abis/SOFBondingCurveAbi.js";
 import infoFiMarketFactoryAbi from "../src/abis/InfoFiMarketFactoryAbi.js";
@@ -417,37 +416,6 @@ async function syncHistoricalPositions() {
   }
 }
 
-/**
- * Sync historical raffle transactions for all active seasons
- * Runs on server startup to populate transaction history
- */
-async function syncHistoricalTransactions() {
-  try {
-    app.log.info("🎫 Starting historical transaction sync...");
-
-    const results = await raffleTransactionService.syncAllActiveSeasons();
-
-    const totalRecorded = results.reduce(
-      (sum, r) => sum + (r.recorded || 0),
-      0,
-    );
-    const totalSkipped = results.reduce((sum, r) => sum + (r.skipped || 0), 0);
-    const totalErrors = results.reduce((sum, r) => sum + (r.errors || 0), 0);
-
-    app.log.info(
-      `✅ Historical transaction sync complete: ${totalRecorded} new transactions, ` +
-        `${totalSkipped} already synced, ${totalErrors} errors`,
-    );
-
-    if (results.length > 0) {
-      app.log.debug({ seasons: results }, "Sync details by season");
-    }
-  } catch (error) {
-    app.log.error("Failed to sync historical transactions:", error);
-    // Don't crash server, but log the error
-  }
-}
-
 // Start server
 const PORT = process.env.PORT || 3000;
 
@@ -465,11 +433,6 @@ try {
   // Sync historical positions in background (non-blocking)
   syncHistoricalPositions().catch((err) => {
     app.log.error({ err }, "Failed to sync historical positions");
-  });
-
-  // Sync historical transactions in background (non-blocking)
-  syncHistoricalTransactions().catch((err) => {
-    app.log.error({ err }, "Failed to sync historical transactions");
   });
 
   app.log.info("✅ Server ready - listeners and sync starting in background");
