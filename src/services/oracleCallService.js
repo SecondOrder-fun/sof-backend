@@ -187,9 +187,11 @@ export class OracleCallService {
 
     // Log wallet account for verification - ALWAYS FRESH
     const accountAddress = wallet.account.address;
-    const expectedAddress = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
-    const isCorrect =
-      accountAddress.toLowerCase() === expectedAddress.toLowerCase();
+    const expectedAddress = process.env.BACKEND_WALLET_ADDRESS;
+    const shouldCheckExpected = Boolean(expectedAddress);
+    const isCorrect = shouldCheckExpected
+      ? accountAddress.toLowerCase() === String(expectedAddress).toLowerCase()
+      : true;
 
     logger?.info(`📝 Oracle call using account: ${accountAddress}`);
     if (!isCorrect) {
@@ -197,16 +199,13 @@ export class OracleCallService {
         `❌ WRONG ACCOUNT! Expected ${expectedAddress}, got ${accountAddress}`,
       );
       logger?.error(
-        `❌ PRIVATE_KEY env var: ${process.env.PRIVATE_KEY ? "SET" : "NOT SET"}`,
-      );
-      logger?.error(
-        `❌ PRIVATE_KEY_TESTNET env var: ${
-          process.env.PRIVATE_KEY_TESTNET ? "SET" : "NOT SET"
+        `❌ BACKEND_WALLET_PRIVATE_KEY env var: ${
+          process.env.BACKEND_WALLET_PRIVATE_KEY ? "SET" : "NOT SET"
         }`,
       );
       logger?.error(
-        `❌ PRIVATE_KEY_MAINNET env var: ${
-          process.env.PRIVATE_KEY_MAINNET ? "SET" : "NOT SET"
+        `❌ BACKEND_WALLET_ADDRESS env var: ${
+          process.env.BACKEND_WALLET_ADDRESS ? "SET" : "NOT SET"
         }`,
       );
     }

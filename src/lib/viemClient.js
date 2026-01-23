@@ -63,37 +63,36 @@ export function getPublicClient(key) {
 export function getWalletClient(key = NETWORK) {
   const netKey = String(key || "").toUpperCase();
 
-  // IMPORTANT:
-  // - For TESTNET/MAINNET we require explicit network-specific private keys.
-  // - For LOCAL we allow the generic keys.
-  // Reason: prevents accidentally using a local/mainnet key on a different network.
-  let privateKey;
+  const configuredPrivateKey = process.env.BACKEND_WALLET_PRIVATE_KEY;
+  const configuredAddress = process.env.BACKEND_WALLET_ADDRESS;
 
-  if (netKey === "TESTNET") {
-    privateKey = process.env.PRIVATE_KEY_TESTNET;
-    if (!privateKey) {
-      throw new Error(
-        "Backend wallet private key not configured for TESTNET. Set PRIVATE_KEY_TESTNET in environment.",
-      );
-    }
-  } else if (netKey === "MAINNET") {
-    privateKey = process.env.PRIVATE_KEY_MAINNET;
-    if (!privateKey) {
-      throw new Error(
-        "Backend wallet private key not configured for MAINNET. Set PRIVATE_KEY_MAINNET in environment.",
-      );
-    }
-  } else {
-    privateKey = process.env.PRIVATE_KEY;
-    if (!privateKey) {
-      throw new Error(
-        "Backend wallet private key not configured for LOCAL. Set PRIVATE_KEY in environment.",
-      );
-    }
+  if (!configuredPrivateKey) {
+    throw new Error(
+      `Backend wallet private key not configured for ${netKey}. Set BACKEND_WALLET_PRIVATE_KEY in environment.`,
+    );
+  }
+
+  if (!configuredAddress) {
+    throw new Error(
+      `Backend wallet address not configured for ${netKey}. Set BACKEND_WALLET_ADDRESS in environment.`,
+    );
+  }
+
+  const normalizedKey = configuredPrivateKey.startsWith("0x")
+    ? configuredPrivateKey
+    : `0x${configuredPrivateKey}`;
+
+  const account = privateKeyToAccount(normalizedKey);
+
+  if (
+    account.address.toLowerCase() !== String(configuredAddress).toLowerCase()
+  ) {
+    throw new Error(
+      `BACKEND_WALLET_ADDRESS does not match BACKEND_WALLET_PRIVATE_KEY. Expected ${account.address}, got ${configuredAddress}.`,
+    );
   }
 
   const chain = getChainByKey(key);
-  const account = privateKeyToAccount(privateKey);
 
   const client = createWalletClient({
     account,

@@ -32,56 +32,70 @@ export class PaymasterService {
     try {
       const {
         DEFAULT_NETWORK,
+        PAYMASTER_RPC_URL,
         PAYMASTER_RPC_URL_TESTNET,
-        PRIVATE_KEY_TESTNET,
-        PRIVATE_KEY_MAINNET,
+        BACKEND_WALLET_PRIVATE_KEY,
+        BACKEND_WALLET_ADDRESS,
       } = process.env;
 
       const isTestnet = DEFAULT_NETWORK === "TESTNET";
+      const paymasterUrl = isTestnet
+        ? PAYMASTER_RPC_URL_TESTNET
+        : PAYMASTER_RPC_URL;
 
       // Validate required environment variables
-      if (!PAYMASTER_RPC_URL_TESTNET && isTestnet) {
-        throw new Error("PAYMASTER_RPC_URL_TESTNET not configured");
-      }
-
-      const requiredKey = isTestnet ? PRIVATE_KEY_TESTNET : PRIVATE_KEY_MAINNET;
-      if (!requiredKey) {
+      if (!paymasterUrl) {
         throw new Error(
           isTestnet
-            ? "PRIVATE_KEY_TESTNET not configured"
-            : "PRIVATE_KEY_MAINNET not configured"
+            ? "PAYMASTER_RPC_URL_TESTNET not configured"
+            : "PAYMASTER_RPC_URL not configured",
         );
       }
 
+      if (!BACKEND_WALLET_PRIVATE_KEY) {
+        throw new Error("BACKEND_WALLET_PRIVATE_KEY not configured");
+      }
+
+      if (!BACKEND_WALLET_ADDRESS) {
+        throw new Error("BACKEND_WALLET_ADDRESS not configured");
+      }
+
       // Create account from private key
-      const normalizedKey = requiredKey.startsWith("0x")
-        ? requiredKey
-        : `0x${requiredKey}`;
+      const normalizedKey = BACKEND_WALLET_PRIVATE_KEY.startsWith("0x")
+        ? BACKEND_WALLET_PRIVATE_KEY
+        : `0x${BACKEND_WALLET_PRIVATE_KEY}`;
 
       this.account = privateKeyToAccount(normalizedKey);
 
+      if (
+        this.account.address.toLowerCase() !==
+        String(BACKEND_WALLET_ADDRESS).toLowerCase()
+      ) {
+        throw new Error(
+          `BACKEND_WALLET_ADDRESS does not match BACKEND_WALLET_PRIVATE_KEY. Expected ${this.account.address}, got ${BACKEND_WALLET_ADDRESS}.`,
+        );
+      }
+
       // Create wallet client with Paymaster RPC
       const chain = isTestnet ? baseSepolia : base;
-      const rpcUrl = PAYMASTER_RPC_URL_TESTNET; // Paymaster RPC will sponsor transactions
-
       this.walletClient = createWalletClient({
         account: this.account,
         chain,
-        transport: http(rpcUrl),
+        transport: http(paymasterUrl),
       });
 
       this.initialized = true;
 
       this.logger.info(
-        `✅ PaymasterService initialized with viem wallet client`
+        `✅ PaymasterService initialized with viem wallet client`,
       );
       this.logger.info(
-        `   Network: ${isTestnet ? "Base Sepolia" : "Base Mainnet"}`
+        `   Network: ${isTestnet ? "Base Sepolia" : "Base Mainnet"}`,
       );
       this.logger.info(`   Account: ${this.account.address}`);
     } catch (error) {
       this.logger.error(
-        `❌ PaymasterService initialization failed: ${error.message}`
+        `❌ PaymasterService initialization failed: ${error.message}`,
       );
       throw error;
     }
@@ -104,7 +118,7 @@ export class PaymasterService {
   async createMarket(params, logger) {
     if (!this.initialized) {
       throw new Error(
-        "PaymasterService not initialized. Call initialize() first."
+        "PaymasterService not initialized. Call initialize() first.",
       );
     }
 
@@ -123,7 +137,7 @@ export class PaymasterService {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         logger.info(
-          `🔄 Attempt ${attempt}/${maxRetries}: Creating market for player ${player}`
+          `🔄 Attempt ${attempt}/${maxRetries}: Creating market for player ${player}`,
         );
 
         // Encode the onPositionUpdate function call
@@ -177,7 +191,7 @@ export class PaymasterService {
           })
           .catch((error) => {
             logger.error(
-              `❌ Failed to wait for market creation receipt: ${error.message}`
+              `❌ Failed to wait for market creation receipt: ${error.message}`,
             );
           });
 
@@ -197,8 +211,8 @@ export class PaymasterService {
         } catch (serializationError) {
           logger.error(
             `Failed to serialize full error object: ${String(
-              serializationError
-            )}`
+              serializationError,
+            )}`,
           );
         }
 
@@ -211,8 +225,8 @@ export class PaymasterService {
           } catch (causeSerializationError) {
             logger.error(
               `Failed to serialize error.cause: ${String(
-                causeSerializationError
-              )}`
+                causeSerializationError,
+              )}`,
             );
           }
         }
@@ -223,7 +237,7 @@ export class PaymasterService {
           await new Promise((resolve) => setTimeout(resolve, delayMs));
         } else {
           logger.error(
-            `❌ Market creation failed after ${maxRetries} attempts`
+            `❌ Market creation failed after ${maxRetries} attempts`,
           );
           return {
             success: false,
