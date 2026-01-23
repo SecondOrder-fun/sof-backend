@@ -1,7 +1,10 @@
 import { publicClient } from "../lib/viemClient.js";
 import { db } from "../../shared/supabaseClient.js";
 import { getChainByKey } from "../config/chain.js";
-import { startContractEventPolling } from "../lib/contractEventPolling.js";
+import {
+  getContractEventsInChunks,
+  startContractEventPolling,
+} from "../lib/contractEventPolling.js";
 
 /**
  * Process a SeasonStarted event log
@@ -110,13 +113,16 @@ async function scanHistoricalSeasonEvents(
 
     logger.info(`   Scanning from block ${fromBlock} to ${currentBlock}`);
 
-    // Fetch historical events
-    const logs = await publicClient.getContractEvents({
+    // Fetch historical events (chunked + retry/backoff for public RPC stability)
+    const logs = await getContractEventsInChunks({
+      client: publicClient,
       address: raffleAddress,
       abi: raffleAbi,
       eventName: "SeasonStarted",
       fromBlock,
       toBlock: currentBlock,
+      maxBlockRange: 2_000n,
+      maxRetries: 5,
     });
 
     if (logs.length > 0) {

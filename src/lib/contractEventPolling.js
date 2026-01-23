@@ -110,3 +110,98 @@ export async function startContractEventPolling(params) {
     clearInterval(intervalId);
   };
 }
+
+/**
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+function isTransientRpcError(error) {
+  const message =
+    error && typeof error === "object" && "message" in error
+      ? String(error.message)
+      : String(error);
+
+  return (
+    message.includes("responded with 503") ||
+    message.includes("responded with 429") ||
+    message.includes("ETIMEDOUT") ||
+    message.includes("ECONNRESET")
+  );
+}
+
+/**
+ * @param {number} attempt
+ * @returns {number}
+ */
+function getBackoffMs(attempt) {
+  const base = 500;
+  const max = 10_000;
+  const ms = base * Math.pow(2, Math.max(0, attempt - 1));
+  return Math.min(ms, max);
+}
+
+/**
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * @param {ContractEventPollingParams & { fromBlock: bigint, toBlock: bigint, maxRetries?: number }} params
+ * @returns {Promise<any[]>}
+ */
+export async function getContractEventsInChunks(params) {
+  const {
+    client,
+    address,
+    abi,
+    eventName,
+    fromBlock,
+    toBlock,
+    maxBlockRange = 2_000n,
+    maxRetries = 5,
+  } = params;
+
+  if (fromBlock > toBlock) return [];
+
+  /** @type {any[]} */
+  const allLogs = [];
+
+  let currentFrom = fromBlock;
+  while (currentFrom <= toBlock) {
+    const remaining = toBlock - currentFrom;
+    const chunkSize = remaining > maxBlockRange ? maxBlockRange : remaining;
+    const currentTo = currentFrom + chunkSize;
+
+    let attempt = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        const logs = await client.getContractEvents({
+          address,
+          abi,
+          eventName,
+          fromBlock: currentFrom,
+          toBlock: currentTo,
+        });
+        allLogs.push(...logs);
+        break;
+      } catch (error) {
+        attempt += 1;
+        if (!isTransientRpcError(error) || attempt > maxRetries) {
+          throw error;
+        }
+
+        await sleep(getBackoffMs(attempt));
+      }
+    }
+
+    currentFrom = currentTo + 1n;
+  }
+
+  return allLogs;
+}
