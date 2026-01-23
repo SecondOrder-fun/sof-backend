@@ -1,6 +1,7 @@
 import { publicClient } from "../lib/viemClient.js";
 import { db } from "../../shared/supabaseClient.js";
 import SOFBondingCurveAbi from "../abis/SOFBondingCurveAbi.js";
+import { startContractEventPolling } from "../lib/contractEventPolling.js";
 
 // Market type hash mapping (matches contract constants)
 // These are keccak256 hashes of the market type strings
@@ -66,14 +67,14 @@ async function calculateProbability(seasonId, playerAddress, logger) {
     // Validate numbers
     if (isNaN(ticketCount) || isNaN(totalTickets)) {
       logger.error(
-        `❌ Invalid numbers: ticketCount=${ticketCount}, totalTickets=${totalTickets}`
+        `❌ Invalid numbers: ticketCount=${ticketCount}, totalTickets=${totalTickets}`,
       );
       return 0;
     }
 
     if (totalTickets === 0) {
       logger.warn(
-        `⚠️  Total tickets is 0 after conversion for season ${seasonId}`
+        `⚠️  Total tickets is 0 after conversion for season ${seasonId}`,
       );
       return 0;
     }
@@ -81,20 +82,20 @@ async function calculateProbability(seasonId, playerAddress, logger) {
     const probabilityBps = Math.floor((ticketCount / totalTickets) * 10000);
 
     logger.debug(
-      `📊 Probability calculated for season ${seasonId}, player ${playerAddress}`
+      `📊 Probability calculated for season ${seasonId}, player ${playerAddress}`,
     );
     logger.debug(`   Player tickets: ${ticketCount}`);
     logger.debug(`   Total tickets: ${totalTickets}`);
     logger.debug(
       `   Probability: ${probabilityBps} bps (${(probabilityBps / 100).toFixed(
-        2
-      )}%)`
+        2,
+      )}%)`,
     );
 
     return probabilityBps;
   } catch (error) {
     logger.error(
-      `❌ Failed to calculate probability for season ${seasonId}, player ${playerAddress}`
+      `❌ Failed to calculate probability for season ${seasonId}, player ${playerAddress}`,
     );
     logger.error(`   Error: ${error.message}`);
     logger.debug(`   Full error:`, error);
@@ -116,7 +117,7 @@ async function calculateProbability(seasonId, playerAddress, logger) {
 export async function startMarketCreatedListener(
   infoFiFactoryAddress,
   infoFiFactoryAbi,
-  logger
+  logger,
 ) {
   // Validate inputs
   if (!infoFiFactoryAddress || !infoFiFactoryAbi) {
@@ -127,11 +128,13 @@ export async function startMarketCreatedListener(
     throw new Error("logger instance is required");
   }
 
-  // Start watching for MarketCreated events
-  const unwatch = publicClient.watchContractEvent({
+  const unwatch = await startContractEventPolling({
+    client: publicClient,
     address: infoFiFactoryAddress,
     abi: infoFiFactoryAbi,
     eventName: "MarketCreated",
+    pollingIntervalMs: 3_000,
+    maxBlockRange: 2_000n,
     onLogs: async (logs) => {
       for (const log of logs) {
         // Log the ENTIRE raw log object first
@@ -141,8 +144,8 @@ export async function startMarketCreatedListener(
         logger.info(`   Data: ${log.data}`);
         logger.info(
           `   Args (raw): ${JSON.stringify(log.args, (key, value) =>
-            typeof value === "bigint" ? value.toString() : value
-          )}`
+            typeof value === "bigint" ? value.toString() : value,
+          )}`,
         );
 
         const { seasonId, player, marketType, conditionId, fpmmAddress } =
@@ -182,11 +185,11 @@ export async function startMarketCreatedListener(
             const existingMarket = await db.hasInfoFiMarket(
               seasonIdNum,
               player,
-              marketTypeStr
+              marketTypeStr,
             );
             if (existingMarket) {
               logger.warn(
-                `⚠️  Market already exists for season ${seasonIdNum}, player ${player}, type ${marketTypeStr}`
+                `⚠️  Market already exists for season ${seasonIdNum}, player ${player}, type ${marketTypeStr}`,
               );
               logger.warn(`   Skipping duplicate market creation`);
               continue; // Skip to next log
@@ -199,7 +202,7 @@ export async function startMarketCreatedListener(
               logger.info(`   Player ID retrieved: ${playerId}`);
             } catch (playerError) {
               logger.error(
-                `   Failed to get/create player ID: ${playerError.message}`
+                `   Failed to get/create player ID: ${playerError.message}`,
               );
               logger.debug(`   Player error details:`, playerError);
               playerId = null; // Explicitly set to null if failed
@@ -209,7 +212,7 @@ export async function startMarketCreatedListener(
             const probabilityBps = await calculateProbability(
               seasonIdNum,
               player,
-              logger
+              logger,
             );
 
             // Create market entry with all required fields
@@ -233,19 +236,19 @@ export async function startMarketCreatedListener(
             logger.info(
               `   Probability: ${probabilityBps} bps (${(
                 probabilityBps / 100
-              ).toFixed(2)}%)`
+              ).toFixed(2)}%)`,
             );
             logger.info(`   Status: Market created successfully`);
           } catch (dbError) {
             logger.error(
-              `❌ Failed to create market in database: ${dbError.message}`
+              `❌ Failed to create market in database: ${dbError.message}`,
             );
             logger.debug(`   Full error:`, dbError);
             // Don't throw - continue listening even if database update fails
           }
         } catch (error) {
           logger.error(
-            `❌ Failed to process MarketCreated event for season ${seasonId}, player ${player}`
+            `❌ Failed to process MarketCreated event for season ${seasonId}, player ${player}`,
           );
           logger.error(`   Error Type: ${error?.name || "Unknown"}`);
           logger.error(`   Error Message: ${error?.message || String(error)}`);
@@ -255,57 +258,26 @@ export async function startMarketCreatedListener(
       }
     },
     onError: (error) => {
-      // Viem errors have specific properties: name, message, code, details, shortMessage
       try {
         const errorDetails = {
-          type: error?.name || "Unknown",
-          message: error?.message || String(error),
-          shortMessage: error?.shortMessage || undefined,
-          code: error?.code || undefined,
-          details: error?.details || undefined,
-          cause: error?.cause?.message || error?.cause || undefined,
-          stack: error?.stack || undefined,
+          type:
+            error && typeof error === "object" && "name" in error
+              ? String(error.name)
+              : "Unknown",
+          message:
+            error && typeof error === "object" && "message" in error
+              ? String(error.message)
+              : String(error),
         };
-
-        const isFilterNotFound =
-          (errorDetails.details &&
-            String(errorDetails.details).includes("filter not found")) ||
-          (errorDetails.message &&
-            String(errorDetails.message).includes("filter not found"));
-
-        if (isFilterNotFound) {
-          logger.debug(
-            { errorDetails },
-            "MarketCreated Listener filter not found (silenced)"
-          );
-        } else {
-          logger.error({ errorDetails }, "❌ MarketCreated Listener Error");
-        }
+        logger.error({ errorDetails }, "❌ MarketCreated Listener Error");
       } catch (logError) {
-        // Fallback if error object can't be serialized
-        const isFilterNotFoundFallback =
-          String(error).includes("filter not found") ||
-          String(logError).includes("filter not found");
-        if (isFilterNotFoundFallback) {
-          logger.debug(
-            `MarketCreated Listener filter not found (silenced): ${String(
-              error
-            )}`
-          );
-        } else {
-          logger.error(`❌ MarketCreated Listener Error: ${String(error)}`);
-          logger.debug("Raw error:", error);
-        }
+        logger.error(`❌ MarketCreated Listener Error: ${String(logError)}`);
       }
-
-      // Future: Implement retry logic or alerting
     },
-    poll: true, // Use polling for HTTP transport
-    pollingInterval: 3000, // Check every 3 seconds
   });
 
   logger.info(
-    `🎧 Listening for MarketCreated events on ${infoFiFactoryAddress}`
+    `🎧 Listening for MarketCreated events on ${infoFiFactoryAddress}`,
   );
   return unwatch;
 }

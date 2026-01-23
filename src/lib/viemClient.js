@@ -2,7 +2,7 @@
 // Factory for viem PublicClient and WalletClient per network
 
 import process from "node:process";
-import { createPublicClient, createWalletClient, fallback, http } from "viem";
+import { createPublicClient, createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { getChainByKey } from "../config/chain.js";
 
@@ -18,85 +18,8 @@ if (!NETWORK) {
   );
 }
 
-const DEMOTION_WINDOW_MS = 5 * 60 * 1000;
-const RESET_INTERVAL_MS = 10 * 60 * 1000;
-const badRpcUrls = new Map();
-let lastResetAt = Date.now();
-
-function resetBadRpcUrls() {
-  badRpcUrls.clear();
-  lastResetAt = Date.now();
-}
-
-function maybeResetDemotions(now) {
-  if (now - lastResetAt >= RESET_INTERVAL_MS) {
-    resetBadRpcUrls();
-  }
-}
-
-function markRpcBad(url, now) {
-  badRpcUrls.set(url, now + DEMOTION_WINDOW_MS);
-}
-
-function isRpcBad(url, now) {
-  const until = badRpcUrls.get(url);
-  if (!until) return false;
-  if (now >= until) {
-    badRpcUrls.delete(url);
-    return false;
-  }
-  return true;
-}
-
-function getFallbackUrlsForKey(key) {
-  const netKey = String(key || "").toUpperCase();
-  if (netKey === "TESTNET") {
-    return (process.env.RPC_URL_TESTNET_FALLBACKS || "")
-      .split(",")
-      .map((url) => url.trim())
-      .filter(Boolean);
-  }
-  if (netKey === "MAINNET") {
-    return (process.env.RPC_URL_MAINNET_FALLBACKS || "")
-      .split(",")
-      .map((url) => url.trim())
-      .filter(Boolean);
-  }
-  if (netKey === "LOCAL") {
-    return (process.env.RPC_URL_LOCAL_FALLBACKS || "")
-      .split(",")
-      .map((url) => url.trim())
-      .filter(Boolean);
-  }
-  return [];
-}
-
-function buildRpcTransport(chainKey, rpcUrl) {
-  const now = Date.now();
-  maybeResetDemotions(now);
-  const fallbackUrls = getFallbackUrlsForKey(chainKey);
-  const allUrls = [rpcUrl, ...fallbackUrls].filter(Boolean);
-  const activeUrls = allUrls.filter((url) => !isRpcBad(url, now));
-  const urlsToUse = activeUrls.length > 0 ? activeUrls : allUrls;
-
-  const httpTransports = urlsToUse.map((url) =>
-    http(url, {
-      onFetchResponse(response) {
-        if (response.status === 403 || response.status === 429) {
-          markRpcBad(url, Date.now());
-          throw new Error(`RPC ${url} responded with ${response.status}`);
-        }
-        if (response.status >= 500) {
-          markRpcBad(url, Date.now());
-          throw new Error(`RPC ${url} responded with ${response.status}`);
-        }
-      },
-    }),
-  );
-
-  return httpTransports.length > 1
-    ? fallback(httpTransports, { rank: false })
-    : httpTransports[0];
+function buildRpcTransport(rpcUrl) {
+  return http(rpcUrl);
 }
 
 // Default public client for event listeners (uses configured NETWORK)
@@ -108,7 +31,7 @@ export const publicClient = createPublicClient({
     nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
     rpcUrls: { default: { http: [defaultChain.rpcUrl] } },
   },
-  transport: buildRpcTransport(NETWORK, defaultChain.rpcUrl),
+  transport: buildRpcTransport(defaultChain.rpcUrl),
   pollingInterval: 4_000, // Force polling mode for public RPC compatibility
 });
 
@@ -125,7 +48,7 @@ export function getPublicClient(key) {
       nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
       rpcUrls: { default: { http: [chain.rpcUrl] } },
     },
-    transport: buildRpcTransport(key, chain.rpcUrl),
+    transport: buildRpcTransport(chain.rpcUrl),
     pollingInterval: 4_000, // Force polling mode for public RPC compatibility
   });
 }
@@ -180,7 +103,7 @@ export function getWalletClient(key = NETWORK) {
       nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
       rpcUrls: { default: { http: [chain.rpcUrl] } },
     },
-    transport: buildRpcTransport(netKey, chain.rpcUrl),
+    transport: buildRpcTransport(chain.rpcUrl),
   });
 
   return client;

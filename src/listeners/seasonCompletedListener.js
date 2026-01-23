@@ -2,6 +2,7 @@ import { publicClient, getWalletClient } from "../lib/viemClient.js";
 import { db, supabase } from "../../shared/supabaseClient.js";
 import { getChainByKey } from "../config/chain.js";
 import InfoFiMarketFactoryAbi from "../abis/InfoFiMarketFactoryAbi.js";
+import { startContractEventPolling } from "../lib/contractEventPolling.js";
 
 /**
  * Resolve InfoFi markets onchain via InfoFiMarketFactory.resolveSeasonMarkets()
@@ -17,7 +18,7 @@ async function resolveMarketsOnchain(seasonId, winnerAddress, logger) {
     const infoFiFactoryAddress = chain.infofiFactory;
     if (!infoFiFactoryAddress) {
       logger.warn(
-        `   INFOFI_FACTORY_ADDRESS_${network} not configured, skipping onchain resolution`
+        `   INFOFI_FACTORY_ADDRESS_${network} not configured, skipping onchain resolution`,
       );
       return false;
     }
@@ -29,7 +30,7 @@ async function resolveMarketsOnchain(seasonId, winnerAddress, logger) {
     }
 
     logger.info(
-      `   📡 Calling resolveSeasonMarkets(${seasonId}, ${winnerAddress}) on ${infoFiFactoryAddress}`
+      `   📡 Calling resolveSeasonMarkets(${seasonId}, ${winnerAddress}) on ${infoFiFactoryAddress}`,
     );
 
     const hash = await wallet.writeContract({
@@ -49,7 +50,7 @@ async function resolveMarketsOnchain(seasonId, winnerAddress, logger) {
 
     if (receipt.status === "success") {
       logger.info(
-        `   ✅ Onchain market resolution successful (block: ${receipt.blockNumber})`
+        `   ✅ Onchain market resolution successful (block: ${receipt.blockNumber})`,
       );
       return true;
     } else {
@@ -85,7 +86,7 @@ async function settleInfoFiMarkets(seasonId, raffleAddress, raffleAbi, logger) {
 
     if (!winners || winners.length === 0) {
       logger.warn(
-        `   No winners found for season ${seasonId}, skipping InfoFi settlement`
+        `   No winners found for season ${seasonId}, skipping InfoFi settlement`,
       );
       return;
     }
@@ -97,12 +98,12 @@ async function settleInfoFiMarkets(seasonId, raffleAddress, raffleAbi, logger) {
     const onchainSuccess = await resolveMarketsOnchain(
       seasonId,
       winnerAddress,
-      logger
+      logger,
     );
 
     if (!onchainSuccess) {
       logger.warn(
-        `   Onchain resolution failed, but continuing with database update`
+        `   Onchain resolution failed, but continuing with database update`,
       );
     }
 
@@ -110,13 +111,13 @@ async function settleInfoFiMarkets(seasonId, raffleAddress, raffleAbi, logger) {
     const markets = await db.getInfoFiMarketsBySeasonId(seasonId);
     if (!markets || markets.length === 0) {
       logger.info(
-        `   No InfoFi markets found in database for season ${seasonId}`
+        `   No InfoFi markets found in database for season ${seasonId}`,
       );
       return;
     }
 
     logger.info(
-      `   Found ${markets.length} InfoFi market(s) to settle in database`
+      `   Found ${markets.length} InfoFi market(s) to settle in database`,
     );
 
     // Update each market in the database
@@ -137,11 +138,11 @@ async function settleInfoFiMarkets(seasonId, raffleAddress, raffleAbi, logger) {
 
       if (error) {
         logger.error(
-          `   Failed to settle market ${market.id} in DB: ${error.message}`
+          `   Failed to settle market ${market.id} in DB: ${error.message}`,
         );
       } else {
         logger.info(
-          `   ✅ DB settled market ${market.id} (player: ${market.player_address}, won: ${isWinner})`
+          `   ✅ DB settled market ${market.id} (player: ${market.player_address}, won: ${isWinner})`,
         );
       }
     }
@@ -149,7 +150,7 @@ async function settleInfoFiMarkets(seasonId, raffleAddress, raffleAbi, logger) {
     logger.info(`   InfoFi markets settlement complete for season ${seasonId}`);
   } catch (error) {
     logger.error(
-      `   Failed to settle InfoFi markets for season ${seasonId}: ${error.message}`
+      `   Failed to settle InfoFi markets for season ${seasonId}: ${error.message}`,
     );
   }
 }
@@ -165,7 +166,7 @@ async function processSeasonCompletedLog(
   log,
   raffleAddress,
   raffleAbi,
-  logger
+  logger,
 ) {
   const { seasonId } = log.args;
 
@@ -178,7 +179,7 @@ async function processSeasonCompletedLog(
     const existing = await db.getSeasonContracts(seasonIdNum);
     if (!existing) {
       logger.warn(
-        `Season ${seasonId} not found in database, skipping completion`
+        `Season ${seasonId} not found in database, skipping completion`,
       );
       return;
     }
@@ -187,7 +188,7 @@ async function processSeasonCompletedLog(
     await db.updateSeasonStatus(seasonIdNum, false);
 
     logger.info(
-      `✅ SeasonCompleted Event: Season ${seasonId} marked as inactive`
+      `✅ SeasonCompleted Event: Season ${seasonId} marked as inactive`,
     );
 
     // Settle InfoFi markets for this season
@@ -208,7 +209,7 @@ async function processSeasonCompletedLog(
 async function scanHistoricalSeasonCompletedEvents(
   raffleAddress,
   raffleAbi,
-  logger
+  logger,
 ) {
   try {
     logger.info("🔍 Scanning for historical SeasonCompleted events...");
@@ -235,7 +236,7 @@ async function scanHistoricalSeasonCompletedEvents(
 
     if (logs.length > 0) {
       logger.info(
-        `   Found ${logs.length} historical SeasonCompleted event(s)`
+        `   Found ${logs.length} historical SeasonCompleted event(s)`,
       );
 
       for (const log of logs) {
@@ -246,7 +247,7 @@ async function scanHistoricalSeasonCompletedEvents(
     }
   } catch (error) {
     logger.error(
-      `❌ Failed to scan historical SeasonCompleted events: ${error.message}`
+      `❌ Failed to scan historical SeasonCompleted events: ${error.message}`,
     );
     // Don't throw - continue with real-time listener
   }
@@ -263,7 +264,7 @@ async function scanHistoricalSeasonCompletedEvents(
 export async function startSeasonCompletedListener(
   raffleAddress,
   raffleAbi,
-  logger
+  logger,
 ) {
   // Validate inputs
   if (!raffleAddress || !raffleAbi) {
@@ -277,64 +278,35 @@ export async function startSeasonCompletedListener(
   // First, scan for any historical events we may have missed
   await scanHistoricalSeasonCompletedEvents(raffleAddress, raffleAbi, logger);
 
-  // Start watching for SeasonCompleted events
-  const unwatch = publicClient.watchContractEvent({
+  const unwatch = await startContractEventPolling({
+    client: publicClient,
     address: raffleAddress,
     abi: raffleAbi,
     eventName: "SeasonCompleted",
+    pollingIntervalMs: 3_000,
+    maxBlockRange: 2_000n,
     onLogs: async (logs) => {
       for (const log of logs) {
         await processSeasonCompletedLog(log, raffleAddress, raffleAbi, logger);
       }
     },
     onError: (error) => {
-      // Viem errors have specific properties: name, message, code, details, shortMessage
       try {
         const errorDetails = {
-          type: error?.name || "Unknown",
-          message: error?.message || String(error),
-          shortMessage: error?.shortMessage || undefined,
-          code: error?.code || undefined,
-          details: error?.details || undefined,
-          cause: error?.cause?.message || error?.cause || undefined,
-          stack: error?.stack || undefined,
+          type:
+            error && typeof error === "object" && "name" in error
+              ? String(error.name)
+              : "Unknown",
+          message:
+            error && typeof error === "object" && "message" in error
+              ? String(error.message)
+              : String(error),
         };
-
-        const isFilterNotFound =
-          (errorDetails.details &&
-            String(errorDetails.details).includes("filter not found")) ||
-          (errorDetails.message &&
-            String(errorDetails.message).includes("filter not found"));
-
-        if (isFilterNotFound) {
-          logger.debug(
-            { errorDetails },
-            "SeasonCompleted Listener filter not found (silenced)"
-          );
-        } else {
-          logger.error({ errorDetails }, "❌ SeasonCompleted Listener Error");
-        }
+        logger.error({ errorDetails }, "❌ SeasonCompleted Listener Error");
       } catch (logError) {
-        // Fallback if error object can't be serialized
-        const isFilterNotFoundFallback =
-          String(error).includes("filter not found") ||
-          String(logError).includes("filter not found");
-        if (isFilterNotFoundFallback) {
-          logger.debug(
-            `SeasonCompleted Listener filter not found (silenced): ${String(
-              error
-            )}`
-          );
-        } else {
-          logger.error(`❌ SeasonCompleted Listener Error: ${String(error)}`);
-          logger.debug("Raw error:", error);
-        }
+        logger.error(`❌ SeasonCompleted Listener Error: ${String(logError)}`);
       }
-
-      // Future: Implement retry logic or alerting
     },
-    poll: true, // Use polling for HTTP transport
-    pollingInterval: 3000, // Check every 3 seconds
   });
 
   logger.info(`🎧 Listening for SeasonCompleted events on ${raffleAddress}`);

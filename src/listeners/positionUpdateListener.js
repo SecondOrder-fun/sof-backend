@@ -4,6 +4,7 @@ import { oracleCallService } from "../services/oracleCallService.js";
 import { getPaymasterService } from "../services/paymasterService.js";
 import { getSSEService } from "../services/sseService.js";
 import { raffleTransactionService } from "../services/raffleTransactionService.js";
+import { startContractEventPolling } from "../lib/contractEventPolling.js";
 
 // Simple ERC20 ABI for totalSupply() call
 const erc20Abi = [
@@ -37,12 +38,12 @@ export async function startPositionUpdateListener(
   raffleAbi,
   raffleTokenAddress,
   infoFiFactoryAddress,
-  logger
+  logger,
 ) {
   // Validate inputs
   if (!bondingCurveAddress || !raffleAddress || !raffleTokenAddress) {
     throw new Error(
-      "bondingCurveAddress, raffleAddress, and raffleTokenAddress are required"
+      "bondingCurveAddress, raffleAddress, and raffleTokenAddress are required",
     );
   }
 
@@ -64,7 +65,7 @@ export async function startPositionUpdateListener(
       await paymasterService.initialize();
     } catch (error) {
       logger.warn(
-        `⚠️  PaymasterService initialization failed: ${error.message}`
+        `⚠️  PaymasterService initialization failed: ${error.message}`,
       );
       logger.warn(`   Market creation will not be available`);
     }
@@ -87,11 +88,13 @@ export async function startPositionUpdateListener(
     logger.warn(`   Failed to fetch max supply: ${error.message}`);
   }
 
-  // Start watching for PositionUpdate events
-  const unwatch = publicClient.watchContractEvent({
+  const unwatch = await startContractEventPolling({
+    client: publicClient,
     address: bondingCurveAddress,
     abi: bondingCurveAbi,
     eventName: "PositionUpdate",
+    pollingIntervalMs: 3_000,
+    maxBlockRange: 2_000n,
     onLogs: async (logs) => {
       for (const log of logs) {
         const { seasonId, player, oldTickets, newTickets, totalTickets } =
@@ -112,7 +115,7 @@ export async function startPositionUpdateListener(
 
           logger.debug(
             `📊 PositionUpdate Event: Season ${seasonIdNum}, Player ${player}, ` +
-              `Tickets: ${oldTicketsNum} → ${newTicketsNum}, Total: ${totalTicketsNum}`
+              `Tickets: ${oldTicketsNum} → ${newTicketsNum}, Total: ${totalTicketsNum}`,
           );
 
           // Step 1: Get all participants in this season
@@ -130,26 +133,26 @@ export async function startPositionUpdateListener(
           }
 
           logger.debug(
-            `   Found ${participants.length} participants in season ${seasonIdNum}`
+            `   Found ${participants.length} participants in season ${seasonIdNum}`,
           );
 
           // Step 2: Ensure all participants exist in the players table
           logger.debug(
-            `   Ensuring players table has ${participants.length} participant(s)...`
+            `   Ensuring players table has ${participants.length} participant(s)...`,
           );
           for (const addr of participants) {
             try {
               await db.getOrCreatePlayerId(addr);
             } catch (playerError) {
               logger.warn(
-                `   ⚠️  Failed to upsert player ${addr} into players table: ${playerError.message}`
+                `   ⚠️  Failed to upsert player ${addr} into players table: ${playerError.message}`,
               );
             }
           }
 
           // Step 3: Fetch ticket count for each participant
           logger.debug(
-            `   Fetching positions for ${participants.length} players...`
+            `   Fetching positions for ${participants.length} players...`,
           );
           const playerPositions = await Promise.all(
             participants.map(async (addr) => {
@@ -171,8 +174,8 @@ export async function startPositionUpdateListener(
                 // Could be {ticketCount: 1000n} or similar
                 logger.debug(
                   `   Result for ${addr} is object with keys: ${Object.keys(
-                    result
-                  ).join(", ")}`
+                    result,
+                  ).join(", ")}`,
                 );
 
                 // Try common property names
@@ -202,11 +205,11 @@ export async function startPositionUpdateListener(
                 player: addr,
                 ticketCount,
               };
-            })
+            }),
           );
 
           logger.debug(
-            `   Fetched positions for all ${playerPositions.length} players`
+            `   Fetched positions for all ${playerPositions.length} players`,
           );
 
           // Step 4: Update all players' probabilities in database
@@ -215,7 +218,7 @@ export async function startPositionUpdateListener(
             seasonIdNum,
             totalTicketsNum,
             playerPositions,
-            maxSupply
+            maxSupply,
           );
 
           // Step 5: Update oracle for each player with an active market
@@ -228,36 +231,36 @@ export async function startPositionUpdateListener(
               // Get FPMM address for this player
               const fpmmAddress = await db.getFpmmAddress(
                 seasonIdNum,
-                playerAddr
+                playerAddr,
               );
 
               if (fpmmAddress) {
                 oracleUpdatesAttempted++;
                 const newBps = Math.round(
-                  (ticketCount * 10000) / totalTicketsNum
+                  (ticketCount * 10000) / totalTicketsNum,
                 );
 
                 // Call oracle service
                 const result = await oracleCallService.updateRaffleProbability(
                   fpmmAddress,
                   newBps,
-                  logger
+                  logger,
                 );
 
                 if (result.success) {
                   oracleUpdatesSuccessful++;
                   logger.debug(
-                    `   ✅ Oracle updated for ${playerAddr}: ${newBps} bps (${result.hash})`
+                    `   ✅ Oracle updated for ${playerAddr}: ${newBps} bps (${result.hash})`,
                   );
                 } else {
                   logger.warn(
-                    `   ⚠️  Oracle update failed for ${playerAddr}: ${result.error}`
+                    `   ⚠️  Oracle update failed for ${playerAddr}: ${result.error}`,
                   );
                 }
               }
             } catch (oracleError) {
               logger.warn(
-                `   ⚠️  Error updating oracle for ${playerAddr}: ${oracleError.message}`
+                `   ⚠️  Error updating oracle for ${playerAddr}: ${oracleError.message}`,
               );
             }
           }
@@ -268,7 +271,7 @@ export async function startPositionUpdateListener(
               ? Math.round((oldTicketsNum * 10000) / totalTicketsNum)
               : 0;
           const newProbabilityBps = Math.round(
-            (newTicketsNum * 10000) / totalTicketsNum
+            (newTicketsNum * 10000) / totalTicketsNum,
           );
           const thresholdBps = 100; // 1% = 100 basis points
 
@@ -280,7 +283,7 @@ export async function startPositionUpdateListener(
             // Player crossed 1% threshold - trigger market creation
             marketCreationTriggered = true;
             logger.info(
-              `🎯 Threshold crossed: Player ${player} reached ${newProbabilityBps} bps (≥1%)`
+              `🎯 Threshold crossed: Player ${player} reached ${newProbabilityBps} bps (≥1%)`,
             );
 
             // Broadcast market creation started event
@@ -293,7 +296,7 @@ export async function startPositionUpdateListener(
             if (paymasterService.initialized && infoFiFactoryAddress) {
               try {
                 logger.info(
-                  "🚀 Submitting gasless market creation via Paymaster..."
+                  "🚀 Submitting gasless market creation via Paymaster...",
                 );
                 const result = await paymasterService.createMarket(
                   {
@@ -304,12 +307,12 @@ export async function startPositionUpdateListener(
                     totalTickets: totalTicketsNum,
                     infoFiFactoryAddress,
                   },
-                  logger
+                  logger,
                 );
 
                 if (result.success) {
                   logger.info(
-                    `✅ Market creation confirmed: ${result.hash} (attempts: ${result.attempts})`
+                    `✅ Market creation confirmed: ${result.hash} (attempts: ${result.attempts})`,
                   );
                   sseService.broadcastMarketCreationConfirmed({
                     seasonId: seasonIdNum,
@@ -319,7 +322,7 @@ export async function startPositionUpdateListener(
                   });
                 } else {
                   logger.error(
-                    `❌ Market creation failed: ${result.error} (attempts: ${result.attempts})`
+                    `❌ Market creation failed: ${result.error} (attempts: ${result.attempts})`,
                   );
                   sseService.broadcastMarketCreationFailed({
                     seasonId: seasonIdNum,
@@ -338,7 +341,7 @@ export async function startPositionUpdateListener(
                     });
                   } catch (logError) {
                     logger.warn(
-                      `   ⚠️  Failed to record failed market attempt: ${logError.message}`
+                      `   ⚠️  Failed to record failed market attempt: ${logError.message}`,
                     );
                   }
                 }
@@ -360,13 +363,13 @@ export async function startPositionUpdateListener(
                   });
                 } catch (logError) {
                   logger.warn(
-                    `   ⚠️  Failed to record failed market attempt: ${logError.message}`
+                    `   ⚠️  Failed to record failed market attempt: ${logError.message}`,
                   );
                 }
               }
             } else {
               logger.warn(
-                "⚠️  PaymasterService not initialized or InfoFi factory not configured, skipping market creation"
+                "⚠️  PaymasterService not initialized or InfoFi factory not configured, skipping market creation",
               );
             }
           }
@@ -374,7 +377,7 @@ export async function startPositionUpdateListener(
           // Log success with detailed information
           logger.info(
             `✅ PositionUpdate: Season ${seasonIdNum}, Player ${player} ` +
-              `(${oldTicketsNum} → ${newTicketsNum} tickets)`
+              `(${oldTicketsNum} → ${newTicketsNum} tickets)`,
           );
           logger.info(
             `   Total supply: ${totalTicketsNum} | ` +
@@ -383,7 +386,7 @@ export async function startPositionUpdateListener(
               `Player probability: ${newProbabilityBps} bps | ` +
               `Market creation: ${
                 marketCreationTriggered ? "✅ Triggered" : "⏭️  Not triggered"
-              }`
+              }`,
           );
 
           // Record transaction in database
@@ -405,7 +408,7 @@ export async function startPositionUpdateListener(
               txHash: log.transactionHash,
               blockNumber: Number(log.blockNumber),
               blockTimestamp: new Date(
-                Number(block.timestamp) * 1000
+                Number(block.timestamp) * 1000,
               ).toISOString(),
               ticketsBefore: oldTicketsNum,
               ticketsAfter: newTicketsNum,
@@ -414,7 +417,7 @@ export async function startPositionUpdateListener(
             logger.info(`   💾 Transaction recorded: ${log.transactionHash}`);
           } catch (txError) {
             logger.error(
-              `   ❌ Failed to record transaction: ${txError.message}`
+              `   ❌ Failed to record transaction: ${txError.message}`,
             );
             // Don't crash listener - just log and continue
           }
@@ -425,7 +428,7 @@ export async function startPositionUpdateListener(
             logger.debug(`   Updated player probabilities:`);
             for (const { player: p, ticketCount } of playerPositions) {
               const newBps = Math.round(
-                (ticketCount * 10000) / totalTicketsNum
+                (ticketCount * 10000) / totalTicketsNum,
               );
               logger.debug(`     ${p}: ${ticketCount} tickets → ${newBps} bps`);
             }
@@ -438,17 +441,17 @@ export async function startPositionUpdateListener(
             if (totalBps !== 10000) {
               logger.warn(
                 `⚠️  Probability sum mismatch: Expected 10000, got ${totalBps} ` +
-                  `(difference: ${totalBps - 10000} bps)`
+                  `(difference: ${totalBps - 10000} bps)`,
               );
             }
           } else {
             logger.debug(
-              `   No markets updated (players may not have crossed 1% threshold yet)`
+              `   No markets updated (players may not have crossed 1% threshold yet)`,
             );
           }
         } catch (error) {
           logger.error(
-            `❌ Failed to process PositionUpdate for season ${seasonId}, player ${player}`
+            `❌ Failed to process PositionUpdate for season ${seasonId}, player ${player}`,
           );
           logger.error(`   Error: ${error.message}`);
           logger.debug(`   Full error:`, error);
@@ -457,57 +460,26 @@ export async function startPositionUpdateListener(
       }
     },
     onError: (error) => {
-      // Viem errors have specific properties: name, message, code, details, shortMessage
       try {
         const errorDetails = {
-          type: error?.name || "Unknown",
-          message: error?.message || String(error),
-          shortMessage: error?.shortMessage || undefined,
-          code: error?.code || undefined,
-          details: error?.details || undefined,
-          cause: error?.cause?.message || error?.cause || undefined,
-          stack: error?.stack || undefined,
+          type:
+            error && typeof error === "object" && "name" in error
+              ? String(error.name)
+              : "Unknown",
+          message:
+            error && typeof error === "object" && "message" in error
+              ? String(error.message)
+              : String(error),
         };
-
-        const isFilterNotFound =
-          (errorDetails.details &&
-            String(errorDetails.details).includes("filter not found")) ||
-          (errorDetails.message &&
-            String(errorDetails.message).includes("filter not found"));
-
-        if (isFilterNotFound) {
-          logger.debug(
-            { errorDetails },
-            "PositionUpdate Listener filter not found (silenced)"
-          );
-        } else {
-          logger.error({ errorDetails }, "❌ PositionUpdate Listener Error");
-        }
+        logger.error({ errorDetails }, "❌ PositionUpdate Listener Error");
       } catch (logError) {
-        // Fallback if error object can't be serialized
-        const isFilterNotFoundFallback =
-          String(error).includes("filter not found") ||
-          String(logError).includes("filter not found");
-        if (isFilterNotFoundFallback) {
-          logger.debug(
-            `PositionUpdate Listener filter not found (silenced): ${String(
-              error
-            )}`
-          );
-        } else {
-          logger.error(`❌ PositionUpdate Listener Error: ${String(error)}`);
-          logger.debug("Raw error:", error);
-        }
+        logger.error(`❌ PositionUpdate Listener Error: ${String(logError)}`);
       }
-
-      // Future: Implement retry logic or alerting
     },
-    poll: true, // Use polling for HTTP transport
-    pollingInterval: 3000, // Check every 3 seconds
   });
 
   logger.info(
-    `🎧 Listening for PositionUpdate events on ${bondingCurveAddress}`
+    `🎧 Listening for PositionUpdate events on ${bondingCurveAddress}`,
   );
   return unwatch;
 }

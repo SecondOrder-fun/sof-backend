@@ -1,6 +1,7 @@
 import { publicClient } from "../lib/viemClient.js";
 import { db } from "../../shared/supabaseClient.js";
 import { getChainByKey } from "../config/chain.js";
+import { startContractEventPolling } from "../lib/contractEventPolling.js";
 
 /**
  * Process a SeasonStarted event log
@@ -15,7 +16,7 @@ async function processSeasonStartedLog(
   raffleAddress,
   raffleAbi,
   logger,
-  onSeasonCreated
+  onSeasonCreated,
 ) {
   const { seasonId } = log.args;
 
@@ -70,7 +71,7 @@ async function processSeasonStartedLog(
         });
       } catch (listenerError) {
         logger.error(
-          `❌ Failed to start PositionUpdate listener for season ${seasonIdNum}`
+          `❌ Failed to start PositionUpdate listener for season ${seasonIdNum}`,
         );
         logger.error(`   Error: ${listenerError.message}`);
       }
@@ -93,7 +94,7 @@ async function scanHistoricalSeasonEvents(
   raffleAddress,
   raffleAbi,
   logger,
-  onSeasonCreated
+  onSeasonCreated,
 ) {
   try {
     logger.info("🔍 Scanning for historical SeasonStarted events...");
@@ -127,7 +128,7 @@ async function scanHistoricalSeasonEvents(
           raffleAddress,
           raffleAbi,
           logger,
-          onSeasonCreated
+          onSeasonCreated,
         );
       }
     } else {
@@ -135,7 +136,7 @@ async function scanHistoricalSeasonEvents(
     }
   } catch (error) {
     logger.error(
-      `❌ Failed to scan historical SeasonStarted events: ${error.message}`
+      `❌ Failed to scan historical SeasonStarted events: ${error.message}`,
     );
     // Don't throw - continue with real-time listener
   }
@@ -155,7 +156,7 @@ export async function startSeasonStartedListener(
   raffleAddress,
   raffleAbi,
   logger,
-  onSeasonCreated
+  onSeasonCreated,
 ) {
   // Validate inputs
   if (!raffleAddress || !raffleAbi) {
@@ -171,14 +172,16 @@ export async function startSeasonStartedListener(
     raffleAddress,
     raffleAbi,
     logger,
-    onSeasonCreated
+    onSeasonCreated,
   );
 
-  // Start watching for SeasonStarted events
-  const unwatch = publicClient.watchContractEvent({
+  const unwatch = await startContractEventPolling({
+    client: publicClient,
     address: raffleAddress,
     abi: raffleAbi,
     eventName: "SeasonStarted",
+    pollingIntervalMs: 3_000,
+    maxBlockRange: 2_000n,
     onLogs: async (logs) => {
       for (const log of logs) {
         await processSeasonStartedLog(
@@ -186,58 +189,27 @@ export async function startSeasonStartedListener(
           raffleAddress,
           raffleAbi,
           logger,
-          onSeasonCreated
+          onSeasonCreated,
         );
       }
     },
     onError: (error) => {
-      // Viem errors have specific properties: name, message, code, details, shortMessage
       try {
         const errorDetails = {
-          type: error?.name || "Unknown",
-          message: error?.message || String(error),
-          shortMessage: error?.shortMessage || undefined,
-          code: error?.code || undefined,
-          details: error?.details || undefined,
-          cause: error?.cause?.message || error?.cause || undefined,
-          stack: error?.stack || undefined,
+          type:
+            error && typeof error === "object" && "name" in error
+              ? String(error.name)
+              : "Unknown",
+          message:
+            error && typeof error === "object" && "message" in error
+              ? String(error.message)
+              : String(error),
         };
-
-        const isFilterNotFound =
-          (errorDetails.details &&
-            String(errorDetails.details).includes("filter not found")) ||
-          (errorDetails.message &&
-            String(errorDetails.message).includes("filter not found"));
-
-        if (isFilterNotFound) {
-          logger.debug(
-            { errorDetails },
-            "SeasonStarted Listener filter not found (silenced)"
-          );
-        } else {
-          logger.error({ errorDetails }, "❌ SeasonStarted Listener Error");
-        }
+        logger.error({ errorDetails }, "❌ SeasonStarted Listener Error");
       } catch (logError) {
-        // Fallback if error object can't be serialized
-        const isFilterNotFoundFallback =
-          String(error).includes("filter not found") ||
-          String(logError).includes("filter not found");
-        if (isFilterNotFoundFallback) {
-          logger.debug(
-            `SeasonStarted Listener filter not found (silenced): ${String(
-              error
-            )}`
-          );
-        } else {
-          logger.error(`❌ SeasonStarted Listener Error: ${String(error)}`);
-          logger.debug("Raw error:", error);
-        }
+        logger.error(`❌ SeasonStarted Listener Error: ${String(logError)}`);
       }
-
-      // Future: Implement retry logic or alerting
     },
-    poll: true, // Use polling for HTTP transport
-    pollingInterval: 3000, // Check every 3 seconds
   });
 
   logger.info(`🎧 Listening for SeasonStarted events on ${raffleAddress}`);

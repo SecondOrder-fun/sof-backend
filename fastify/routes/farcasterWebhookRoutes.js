@@ -19,11 +19,7 @@ import {
   verifyAppKeyWithNeynar,
 } from "@farcaster/miniapp-node";
 
-if (!process.env.NEYNAR_API_KEY) {
-  throw new Error(
-    "NEYNAR_API_KEY env var is required for Farcaster webhook verification",
-  );
-}
+const hasNeynarApiKey = Boolean(process.env.NEYNAR_API_KEY);
 
 /**
  * Upsert notification token for a user
@@ -155,6 +151,13 @@ async function deleteNotificationToken(fastify, fid, appKey) {
  * @param {import('fastify').FastifyInstance} fastify
  */
 async function farcasterWebhookRoutes(fastify) {
+  if (!hasNeynarApiKey) {
+    fastify.log.warn(
+      "[Farcaster Webhook] NEYNAR_API_KEY is not set. Skipping /api/webhook/farcaster route registration.",
+    );
+    return;
+  }
+
   /**
    * POST /webhook/farcaster
    * Receives webhook events from Farcaster/Base App

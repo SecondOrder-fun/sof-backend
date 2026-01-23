@@ -13,6 +13,7 @@
 import { publicClient } from "../lib/viemClient.js";
 import { oracleCallService } from "../services/oracleCallService.js";
 import { infoFiPositionService } from "../services/infoFiPositionService.js";
+import { startContractEventPolling } from "../lib/contractEventPolling.js";
 
 /**
  * Starts listening for Trade events from SimpleFPMM contracts
@@ -44,23 +45,26 @@ export async function startTradeListener(fpmmAddresses, fpmmAbi, logger) {
   const unwatchFunctions = [];
 
   logger.info(
-    `[TRADE_LISTENER] 🎧 Starting Trade listeners for ${fpmmAddresses.length} FPMM contract(s)...`
+    `[TRADE_LISTENER] 🎧 Starting Trade listeners for ${fpmmAddresses.length} FPMM contract(s)...`,
   );
 
   // Start listening for Trade events on each FPMM contract
   for (const fpmmAddress of fpmmAddresses) {
     try {
       logger.info(
-        `[TRADE_LISTENER] Setting up listener for FPMM: ${fpmmAddress}`
+        `[TRADE_LISTENER] Setting up listener for FPMM: ${fpmmAddress}`,
       );
 
-      const unwatch = publicClient.watchContractEvent({
+      const unwatch = await startContractEventPolling({
+        client: publicClient,
         address: fpmmAddress,
         abi: fpmmAbi,
         eventName: "Trade",
+        pollingIntervalMs: 4_000,
+        maxBlockRange: 2_000n,
         onLogs: async (logs) => {
           logger.info(
-            `[TRADE_LISTENER] 📥 Received ${logs.length} Trade event(s) for FPMM ${fpmmAddress}`
+            `[TRADE_LISTENER] 📥 Received ${logs.length} Trade event(s) for FPMM ${fpmmAddress}`,
           );
 
           for (const log of logs) {
@@ -72,52 +76,52 @@ export async function startTradeListener(fpmmAddresses, fpmmAbi, logger) {
               const { trader, buyYes, amountIn, amountOut } = log.args;
 
               logger.info(
-                `[TRADE_LISTENER] 📊 Processing Trade: Block ${blockNum}, Tx ${txHash}`
+                `[TRADE_LISTENER] 📊 Processing Trade: Block ${blockNum}, Tx ${txHash}`,
               );
               logger.info(
-                `[TRADE_LISTENER]    FPMM: ${fpmmAddress}, Trader: ${trader}`
+                `[TRADE_LISTENER]    FPMM: ${fpmmAddress}, Trader: ${trader}`,
               );
               logger.info(
-                `[TRADE_LISTENER]    BuyYes: ${buyYes}, AmountIn: ${amountIn}, AmountOut: ${amountOut}`
+                `[TRADE_LISTENER]    BuyYes: ${buyYes}, AmountIn: ${amountIn}, AmountOut: ${amountOut}`,
               );
 
               // Calculate sentiment from trade (using buyYes instead of isLong)
               logger.info(
-                `[TRADE_LISTENER] Step 1/3: Calculating sentiment...`
+                `[TRADE_LISTENER] Step 1/3: Calculating sentiment...`,
               );
               const sentiment = calculateSentiment(amountIn, buyYes, logger);
               logger.info(
-                `[TRADE_LISTENER] ✓ Sentiment calculated: ${sentiment} bps`
+                `[TRADE_LISTENER] ✓ Sentiment calculated: ${sentiment} bps`,
               );
 
               // Update oracle with new sentiment
               logger.info(
-                `[TRADE_LISTENER] Step 2/3: Updating oracle sentiment...`
+                `[TRADE_LISTENER] Step 2/3: Updating oracle sentiment...`,
               );
               const result = await oracleCallService.updateMarketSentiment(
                 fpmmAddress,
                 sentiment,
-                logger
+                logger,
               );
 
               if (result.success) {
                 logger.info(
-                  `[TRADE_LISTENER] ✓ Oracle updated: ${sentiment} bps (${result.hash})`
+                  `[TRADE_LISTENER] ✓ Oracle updated: ${sentiment} bps (${result.hash})`,
                 );
               } else {
                 logger.warn(
-                  `[TRADE_LISTENER] ⚠️  Oracle update failed: ${result.error}`
+                  `[TRADE_LISTENER] ⚠️  Oracle update failed: ${result.error}`,
                 );
               }
 
               // Record position to database
               try {
                 logger.info(
-                  `[TRADE_LISTENER] Step 3/3: Recording position to database...`
+                  `[TRADE_LISTENER] Step 3/3: Recording position to database...`,
                 );
                 logger.info(`[TRADE_LISTENER]    Calling recordPosition with:`);
                 logger.info(
-                  `[TRADE_LISTENER]    - fpmmAddress: ${fpmmAddress}`
+                  `[TRADE_LISTENER]    - fpmmAddress: ${fpmmAddress}`,
                 );
                 logger.info(`[TRADE_LISTENER]    - trader: ${trader}`);
                 logger.info(`[TRADE_LISTENER]    - buyYes: ${buyYes}`);
@@ -131,36 +135,36 @@ export async function startTradeListener(fpmmAddresses, fpmmAbi, logger) {
                     amountIn,
                     amountOut,
                     txHash,
-                  }
+                  },
                 );
 
                 if (recordResult.alreadyRecorded) {
                   logger.info(
-                    `[TRADE_LISTENER] ℹ️  Position already recorded (id: ${recordResult.id})`
+                    `[TRADE_LISTENER] ℹ️  Position already recorded (id: ${recordResult.id})`,
                   );
                 } else {
                   logger.info(
-                    `[TRADE_LISTENER] ✅ SUCCESS: Position recorded (id: ${recordResult.data?.id})`
+                    `[TRADE_LISTENER] ✅ SUCCESS: Position recorded (id: ${recordResult.data?.id})`,
                   );
                 }
               } catch (positionError) {
                 logger.error(
-                  `[TRADE_LISTENER] ❌ FAILED to record position for tx ${txHash}`
+                  `[TRADE_LISTENER] ❌ FAILED to record position for tx ${txHash}`,
                 );
                 logger.error(
-                  `[TRADE_LISTENER]    Error: ${positionError.message}`
+                  `[TRADE_LISTENER]    Error: ${positionError.message}`,
                 );
                 logger.error(
-                  `[TRADE_LISTENER]    Stack: ${positionError.stack}`
+                  `[TRADE_LISTENER]    Stack: ${positionError.stack}`,
                 );
                 // Don't crash listener - just log and continue
               }
             } catch (tradeError) {
               logger.error(
-                `[TRADE_LISTENER] ❌ FATAL ERROR processing Trade event`
+                `[TRADE_LISTENER] ❌ FATAL ERROR processing Trade event`,
               );
               logger.error(
-                `[TRADE_LISTENER]    Tx: ${txHash}, Block: ${blockNum}`
+                `[TRADE_LISTENER]    Tx: ${txHash}, Block: ${blockNum}`,
               );
               logger.error(`[TRADE_LISTENER]    Error: ${tradeError.message}`);
               logger.error(`[TRADE_LISTENER]    Stack: ${tradeError.stack}`);
@@ -168,56 +172,47 @@ export async function startTradeListener(fpmmAddresses, fpmmAbi, logger) {
           }
         },
         onError: (error) => {
-          // Silently ignore "filter not found" errors - they're expected when filters expire
-          if (
-            error?.code === -32602 &&
-            error?.details?.includes("filter not found")
-          ) {
-            logger.debug(
-              `[TRADE_LISTENER] 🔄 Filter expired for ${fpmmAddress}, will be recreated automatically`
-            );
-            return;
-          }
-
           try {
             const errorDetails = {
-              type: error?.name || "Unknown",
-              message: error?.message || String(error),
-              code: error?.code || undefined,
-              details: error?.details || undefined,
+              type:
+                error && typeof error === "object" && "name" in error
+                  ? String(error.name)
+                  : "Unknown",
+              message:
+                error && typeof error === "object" && "message" in error
+                  ? String(error.message)
+                  : String(error),
             };
 
             logger.error(
-              `[TRADE_LISTENER] ❌ Listener Error for ${fpmmAddress}:`
+              `[TRADE_LISTENER] ❌ Listener Error for ${fpmmAddress}:`,
             );
             logger.error(
-              `[TRADE_LISTENER]    ${JSON.stringify(errorDetails, null, 2)}`
+              `[TRADE_LISTENER]    ${JSON.stringify(errorDetails, null, 2)}`,
             );
           } catch (logError) {
             logger.error(
               `[TRADE_LISTENER] ❌ Listener Error for ${fpmmAddress}: ${String(
-                error
-              )}`
+                logError,
+              )}`,
             );
           }
         },
-        poll: true,
-        pollingInterval: 4000, // Check every 4 seconds (slightly longer to reduce RPC load)
       });
 
       unwatchFunctions.push(unwatch);
       logger.info(
-        `[TRADE_LISTENER] ✅ Listening for Trade events on ${fpmmAddress}`
+        `[TRADE_LISTENER] ✅ Listening for Trade events on ${fpmmAddress}`,
       );
     } catch (error) {
       logger.error(
-        `[TRADE_LISTENER] ❌ Failed to start listener for ${fpmmAddress}: ${error.message}`
+        `[TRADE_LISTENER] ❌ Failed to start listener for ${fpmmAddress}: ${error.message}`,
       );
     }
   }
 
   logger.info(
-    `[TRADE_LISTENER] ✅ All ${unwatchFunctions.length} Trade listeners started successfully`
+    `[TRADE_LISTENER] ✅ All ${unwatchFunctions.length} Trade listeners started successfully`,
   );
   return unwatchFunctions;
 }
@@ -261,13 +256,13 @@ function calculateSentiment(collateralAmount, isLong, logger) {
 
     logger.debug(
       `   Sentiment calculation: amount=${amount}, isLong=${isLong}, ` +
-        `sentiment=${sentiment} bps`
+        `sentiment=${sentiment} bps`,
     );
 
     return sentiment;
   } catch (error) {
     logger.warn(
-      `⚠️  Error calculating sentiment: ${error.message}, defaulting to 5000`
+      `⚠️  Error calculating sentiment: ${error.message}, defaulting to 5000`,
     );
     return 5000; // Default to neutral
   }
