@@ -1,7 +1,4 @@
-// Auto-generated from InfoFiMarketFactory.json
-// Do not edit manually - run 'npm run copy-abis' to regenerate
-
-export default [
+const InfoFiMarketFactoryAbi = [
   {
     "type": "constructor",
     "inputs": [
@@ -170,6 +167,11 @@ export default [
         "name": "marketType",
         "type": "bytes32",
         "internalType": "bytes32"
+      },
+      {
+        "name": "probabilityBps",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [],
@@ -624,6 +626,19 @@ export default [
   },
   {
     "type": "function",
+    "name": "setMarketTypeRegistry",
+    "inputs": [
+      {
+        "name": "newRegistry",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setPaymasterAccount",
     "inputs": [
       {
@@ -794,6 +809,25 @@ export default [
         "type": "string",
         "indexed": false,
         "internalType": "string"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "MarketTypeRegistryUpdated",
+    "inputs": [
+      {
+        "name": "oldRegistry",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newRegistry",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
       }
     ],
     "anonymous": false
@@ -1055,3 +1089,5 @@ export default [
     "inputs": []
   }
 ];
+
+export default InfoFiMarketFactoryAbi;
