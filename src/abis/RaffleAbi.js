@@ -1,6 +1,3 @@
-// Auto-generated from Raffle.json
-// Do not edit manually - run npm run copy-abis to regenerate
-
 export default [
   {
     "type": "constructor",
