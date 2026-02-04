@@ -1,5 +1,5 @@
 // Auto-generated from Raffle.json
-// Do not edit manually - run 'npm run copy-abis' to regenerate
+// Do not edit manually - run npm run copy-abis to regenerate
 
 export default [
   {
@@ -95,6 +95,19 @@ export default [
   },
   {
     "type": "function",
+    "name": "_executeFinalizationExternal",
+    "inputs": [
+      {
+        "name": "seasonId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "acceptOwnership",
     "inputs": [],
     "outputs": [],
@@ -148,6 +161,11 @@ export default [
             "internalType": "uint16"
           },
           {
+            "name": "treasuryAddress",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
             "name": "raffleToken",
             "type": "address",
             "internalType": "address"
@@ -164,6 +182,11 @@ export default [
           },
           {
             "name": "isCompleted",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "gated",
             "type": "bool",
             "internalType": "bool"
           }
@@ -257,6 +280,19 @@ export default [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "gatingContract",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -511,6 +547,11 @@ export default [
             "internalType": "uint16"
           },
           {
+            "name": "treasuryAddress",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
             "name": "raffleToken",
             "type": "address",
             "internalType": "address"
@@ -527,6 +568,11 @@ export default [
           },
           {
             "name": "isCompleted",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "gated",
             "type": "bool",
             "internalType": "bool"
           }
@@ -959,6 +1005,11 @@ export default [
         "internalType": "uint16"
       },
       {
+        "name": "treasuryAddress",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
         "name": "raffleToken",
         "type": "address",
         "internalType": "address"
@@ -975,6 +1026,11 @@ export default [
       },
       {
         "name": "isCompleted",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "gated",
         "type": "bool",
         "internalType": "bool"
       }
@@ -1002,6 +1058,19 @@ export default [
         "name": "bps",
         "type": "uint16",
         "internalType": "uint16"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setGatingContract",
+    "inputs": [
+      {
+        "name": "_gatingContract",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -1187,12 +1256,88 @@ export default [
   },
   {
     "type": "event",
+    "name": "AutoFinalizeAttempted",
+    "inputs": [
+      {
+        "name": "seasonId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "success",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "AutoFinalizeFailed",
+    "inputs": [
+      {
+        "name": "seasonId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "reason",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "AutoFinalizeFailedLowLevel",
+    "inputs": [
+      {
+        "name": "seasonId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "data",
+        "type": "bytes",
+        "indexed": false,
+        "internalType": "bytes"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "CoordinatorSet",
     "inputs": [
       {
         "name": "vrfCoordinator",
         "type": "address",
         "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "GatingContractUpdated",
+    "inputs": [
+      {
+        "name": "oldContract",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newContract",
+        "type": "address",
+        "indexed": true,
         "internalType": "address"
       }
     ],
@@ -1576,6 +1721,25 @@ export default [
   },
   {
     "type": "event",
+    "name": "VRFFulfilled",
+    "inputs": [
+      {
+        "name": "seasonId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "requestId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "WinnersSelected",
     "inputs": [
       {
@@ -1613,6 +1777,11 @@ export default [
         "internalType": "bytes32"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "DistributorNotSet",
+    "inputs": []
   },
   {
     "type": "error",
@@ -1700,6 +1869,11 @@ export default [
   },
   {
     "type": "error",
+    "name": "InvalidTreasuryAddress",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "InvalidWinnerCount",
     "inputs": [
       {
@@ -1708,6 +1882,22 @@ export default [
         "internalType": "uint256"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "NoVRFWords",
+    "inputs": [
+      {
+        "name": "seasonId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "NoWinnersSelected",
+    "inputs": []
   },
   {
     "type": "error",
@@ -1811,6 +2001,38 @@ export default [
     "inputs": [
       {
         "name": "seasonId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "UnauthorizedCaller",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UserNotVerified",
+    "inputs": [
+      {
+        "name": "seasonId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "user",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "VRFRequestNotFound",
+    "inputs": [
+      {
+        "name": "requestId",
         "type": "uint256",
         "internalType": "uint256"
       }
