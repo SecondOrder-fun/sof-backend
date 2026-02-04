@@ -2,6 +2,7 @@ import { publicClient } from "../lib/viemClient.js";
 import { db } from "../../shared/supabaseClient.js";
 import SOFBondingCurveAbi from "../abis/SOFBondingCurveAbi.js";
 import { startContractEventPolling } from "../lib/contractEventPolling.js";
+import { createBlockCursor } from "../lib/blockCursor.js";
 
 // Market type hash mapping (matches contract constants)
 // These are keccak256 hashes of the market type strings
@@ -128,6 +129,11 @@ export async function startMarketCreatedListener(
     throw new Error("logger instance is required");
   }
 
+  // Create persistent block cursor for this listener
+  const blockCursor = await createBlockCursor(
+    `${infoFiFactoryAddress}:MarketCreated`,
+  );
+
   const unwatch = await startContractEventPolling({
     client: publicClient,
     address: infoFiFactoryAddress,
@@ -135,6 +141,7 @@ export async function startMarketCreatedListener(
     eventName: "MarketCreated",
     pollingIntervalMs: 3_000,
     maxBlockRange: 2_000n,
+    blockCursor,
     onLogs: async (logs) => {
       for (const log of logs) {
         // Log the ENTIRE raw log object first

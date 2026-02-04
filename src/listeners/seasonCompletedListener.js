@@ -6,6 +6,7 @@ import {
   getContractEventsInChunks,
   startContractEventPolling,
 } from "../lib/contractEventPolling.js";
+import { createBlockCursor } from "../lib/blockCursor.js";
 
 /**
  * Resolve InfoFi markets onchain via InfoFiMarketFactory.resolveSeasonMarkets()
@@ -164,12 +165,14 @@ async function settleInfoFiMarkets(seasonId, raffleAddress, raffleAbi, logger) {
  * @param {string} raffleAddress - Raffle contract address
  * @param {object} raffleAbi - Raffle contract ABI
  * @param {object} logger - Logger instance
+ * @param {function} [onSeasonCompleted] - Callback when season completes (for listener cleanup)
  */
 async function processSeasonCompletedLog(
   log,
   raffleAddress,
   raffleAbi,
   logger,
+  onSeasonCompleted,
 ) {
   const { seasonId } = log.args;
 
@@ -196,6 +199,17 @@ async function processSeasonCompletedLog(
 
     // Settle InfoFi markets for this season
     await settleInfoFiMarkets(seasonIdNum, raffleAddress, raffleAbi, logger);
+
+    // Notify server to clean up per-season listeners
+    if (typeof onSeasonCompleted === "function") {
+      try {
+        await onSeasonCompleted({ seasonId: seasonIdNum });
+      } catch (cleanupError) {
+        logger.error(
+          `❌ Failed to run onSeasonCompleted cleanup for season ${seasonIdNum}: ${cleanupError.message}`,
+        );
+      }
+    }
   } catch (error) {
     logger.error(`❌ Failed to process SeasonCompleted for season ${seasonId}`);
     logger.error(`   Error: ${error.message}`);
@@ -265,12 +279,14 @@ async function scanHistoricalSeasonCompletedEvents(
  * @param {string} raffleAddress - Raffle contract address
  * @param {object} raffleAbi - Raffle contract ABI
  * @param {object} logger - Fastify logger instance (app.log)
+ * @param {function} [onSeasonCompleted] - Callback when season completes (for listener cleanup)
  * @returns {function} Unwatch function to stop listening
  */
 export async function startSeasonCompletedListener(
   raffleAddress,
   raffleAbi,
   logger,
+  onSeasonCompleted,
 ) {
   // Validate inputs
   if (!raffleAddress || !raffleAbi) {
@@ -284,6 +300,11 @@ export async function startSeasonCompletedListener(
   // First, scan for any historical events we may have missed
   await scanHistoricalSeasonCompletedEvents(raffleAddress, raffleAbi, logger);
 
+  // Create persistent block cursor for this listener
+  const blockCursor = await createBlockCursor(
+    `${raffleAddress}:SeasonCompleted`,
+  );
+
   const unwatch = await startContractEventPolling({
     client: publicClient,
     address: raffleAddress,
@@ -291,9 +312,16 @@ export async function startSeasonCompletedListener(
     eventName: "SeasonCompleted",
     pollingIntervalMs: 3_000,
     maxBlockRange: 2_000n,
+    blockCursor,
     onLogs: async (logs) => {
       for (const log of logs) {
-        await processSeasonCompletedLog(log, raffleAddress, raffleAbi, logger);
+        await processSeasonCompletedLog(
+          log,
+          raffleAddress,
+          raffleAbi,
+          logger,
+          onSeasonCompleted,
+        );
       }
     },
     onError: (error) => {

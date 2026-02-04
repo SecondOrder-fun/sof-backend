@@ -9,6 +9,7 @@
  * @property {bigint} [maxBlockRange]
  * @property {(logs: any[]) => Promise<void> | void} onLogs
  * @property {(error: unknown) => void} [onError]
+ * @property {{ get: () => Promise<bigint|null>, set: (block: bigint) => Promise<void> }} [blockCursor]
  */
 
 /**
@@ -26,6 +27,7 @@ export async function startContractEventPolling(params) {
     maxBlockRange = 2_000n,
     onLogs,
     onError,
+    blockCursor,
   } = params;
 
   if (!client) {
@@ -51,8 +53,18 @@ export async function startContractEventPolling(params) {
   let stopped = false;
   let lastProcessedBlock;
 
+  // Determine start block: explicit param > persisted cursor > current block
   if (typeof startBlock === "bigint") {
     lastProcessedBlock = startBlock;
+  } else if (blockCursor) {
+    const persisted = await blockCursor.get();
+    if (persisted !== null && persisted !== undefined) {
+      // Resume from the block AFTER the last fully processed one
+      lastProcessedBlock = persisted + 1n;
+    } else {
+      const currentBlock = await client.getBlockNumber();
+      lastProcessedBlock = currentBlock + 1n;
+    }
   } else {
     const currentBlock = await client.getBlockNumber();
     lastProcessedBlock = currentBlock + 1n;
@@ -92,6 +104,11 @@ export async function startContractEventPolling(params) {
       }
 
       lastProcessedBlock = currentBlock + 1n;
+
+      // Persist the last fully processed block
+      if (blockCursor) {
+        await blockCursor.set(currentBlock);
+      }
     } catch (error) {
       if (typeof onError === "function") {
         onError(error);
