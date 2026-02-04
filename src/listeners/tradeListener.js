@@ -90,13 +90,17 @@ export async function startTradeListener(fpmmAddresses, fpmmAbi, logger) {
                 `[TRADE_LISTENER]    BuyYes: ${buyYes}, AmountIn: ${amountIn}, AmountOut: ${amountOut}`,
               );
 
-              // Calculate sentiment from trade (using buyYes instead of isLong)
+              // Read on-chain FPMM prices to get actual market sentiment
               logger.info(
-                `[TRADE_LISTENER] Step 1/3: Calculating sentiment...`,
+                `[TRADE_LISTENER] Step 1/3: Reading FPMM prices on-chain...`,
               );
-              const sentiment = calculateSentiment(amountIn, buyYes, logger);
+              const sentiment = await readMarketSentiment(
+                fpmmAddress,
+                fpmmAbi,
+                logger,
+              );
               logger.info(
-                `[TRADE_LISTENER] ✓ Sentiment calculated: ${sentiment} bps`,
+                `[TRADE_LISTENER] ✓ Market sentiment (yesPrice): ${sentiment} bps`,
               );
 
               // Update oracle with new sentiment
@@ -223,53 +227,54 @@ export async function startTradeListener(fpmmAddresses, fpmmAbi, logger) {
 }
 
 /**
- * Calculate market sentiment from trade data
+ * Read market sentiment from on-chain FPMM prices
  *
- * @param {bigint|number} collateralAmount - Amount of collateral traded
- * @param {boolean} isLong - Whether this is a long position (true) or short (false)
+ * Calls SimpleFPMM.getPrices() which returns (yesPrice, noPrice) in basis points.
+ * The yesPrice IS the market sentiment — it represents the market's current
+ * probability estimate for YES in bps (0-10000).
+ *
+ * @param {string} fpmmAddress - SimpleFPMM contract address
+ * @param {object} fpmmAbi - SimpleFPMM contract ABI
  * @param {object} logger - Logger instance
- * @returns {number} Sentiment in basis points (0-10000)
+ * @returns {Promise<number>} Sentiment in basis points (0-10000)
  */
-function calculateSentiment(collateralAmount, isLong, logger) {
+async function readMarketSentiment(fpmmAddress, fpmmAbi, logger) {
   try {
-    // Convert to number if BigInt
-    const amount =
-      typeof collateralAmount === "bigint"
-        ? Number(collateralAmount)
-        : collateralAmount;
+    const [yesPrice, noPrice] = await publicClient.readContract({
+      address: fpmmAddress,
+      abi: fpmmAbi,
+      functionName: "getPrices",
+    });
 
-    // Simple sentiment calculation:
-    // - Long positions increase sentiment (bullish)
-    // - Short positions decrease sentiment (bearish)
-    // - Larger amounts have more impact
-    // - Capped at 0-10000 basis points
+    const yesPriceBps = Number(yesPrice);
+    const noPriceBps = Number(noPrice);
 
-    // Base sentiment: 5000 (neutral)
-    let sentiment = 5000;
+    logger.info(
+      `[TRADE_LISTENER]    FPMM prices: yesPrice=${yesPriceBps} bps, noPrice=${noPriceBps} bps`,
+    );
 
-    // Adjust based on position direction and size
-    // Scale: 1 unit of collateral = 1 basis point change (capped)
-    const adjustment = Math.min(Math.max(amount, -5000), 5000);
-
-    if (isLong) {
-      // Long positions increase sentiment
-      sentiment = Math.min(10000, 5000 + adjustment);
-    } else {
-      // Short positions decrease sentiment
-      sentiment = Math.max(0, 5000 - adjustment);
+    // Sanity check: prices should sum to ~10000 bps
+    const sum = yesPriceBps + noPriceBps;
+    if (sum < 9900 || sum > 10100) {
+      logger.warn(
+        `[TRADE_LISTENER] ⚠️  Price sum ${sum} deviates from expected 10000 bps`,
+      );
     }
 
-    logger.debug(
-      `   Sentiment calculation: amount=${amount}, isLong=${isLong}, ` +
-        `sentiment=${sentiment} bps`,
-    );
-
-    return sentiment;
+    // yesPrice is already the market sentiment in bps
+    // Clamp to valid range just in case
+    const sentimentBps = Math.max(0, Math.min(10000, yesPriceBps));
+    return sentimentBps;
   } catch (error) {
-    logger.warn(
-      `⚠️  Error calculating sentiment: ${error.message}, defaulting to 5000`,
+    logger.error(
+      `[TRADE_LISTENER] ❌ Failed to read FPMM prices for ${fpmmAddress}: ${error.message}`,
     );
-    return 5000; // Default to neutral
+    // Fallback: return 5000 (neutral) so oracle call still proceeds
+    // The oracle will still get an update, just not perfectly accurate
+    logger.warn(
+      `[TRADE_LISTENER] ⚠️  Falling back to neutral sentiment (5000 bps)`,
+    );
+    return 5000;
   }
 }
 
