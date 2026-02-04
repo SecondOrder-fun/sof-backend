@@ -1,22 +1,181 @@
 import { publicClient } from "../lib/viemClient.js";
 import { db } from "../../shared/supabaseClient.js";
+import { getChainByKey } from "../config/chain.js";
 import { oracleCallService } from "../services/oracleCallService.js";
 import { getPaymasterService } from "../services/paymasterService.js";
 import { getSSEService } from "../services/sseService.js";
 import { raffleTransactionService } from "../services/raffleTransactionService.js";
-import { startContractEventPolling } from "../lib/contractEventPolling.js";
+import {
+  getContractEventsInChunks,
+  startContractEventPolling,
+} from "../lib/contractEventPolling.js";
 import { createBlockCursor } from "../lib/blockCursor.js";
 
-// Simple ERC20 ABI for totalSupply() call
-const erc20Abi = [
-  {
-    inputs: [],
-    name: "totalSupply",
-    outputs: [{ type: "uint256" }],
-    stateMutability: "view",
-    type: "function",
-  },
-];
+/**
+ * Scan for historical PositionUpdate events that may have been missed
+ * (e.g., if the listener was restarted after token purchases occurred)
+ */
+async function scanHistoricalPositionUpdateEvents(
+  bondingCurveAddress,
+  bondingCurveAbi,
+  raffleAddress,
+  raffleAbi,
+  infoFiFactoryAddress,
+  maxSupply,
+  paymasterService,
+  sseService,
+  logger,
+) {
+  try {
+    logger.info(
+      `🔍 Scanning for historical PositionUpdate events on ${bondingCurveAddress}...`,
+    );
+
+    const currentBlock = await publicClient.getBlockNumber();
+    const chain = getChainByKey(process.env.DEFAULT_NETWORK);
+    const lookbackBlocks = chain.lookbackBlocks;
+    const fromBlock =
+      currentBlock > lookbackBlocks ? currentBlock - lookbackBlocks : 0n;
+
+    logger.info(`   Scanning from block ${fromBlock} to ${currentBlock}`);
+
+    const logs = await getContractEventsInChunks({
+      client: publicClient,
+      address: bondingCurveAddress,
+      abi: bondingCurveAbi,
+      eventName: "PositionUpdate",
+      fromBlock,
+      toBlock: currentBlock,
+      maxBlockRange: 2_000n,
+      maxRetries: 5,
+    });
+
+    if (logs.length > 0) {
+      logger.info(
+        `   Found ${logs.length} historical PositionUpdate event(s)`,
+      );
+
+      // Collect unique players who have crossed the 1% threshold to check for missing markets
+      const supplyForThreshold =
+        maxSupply && maxSupply > 0 ? maxSupply : undefined;
+
+      // Process each log to find players who crossed threshold but may not have markets
+      for (const log of logs) {
+        const { seasonId, player, oldTickets, newTickets, totalTickets } =
+          log.args;
+
+        const seasonIdNum =
+          typeof seasonId === "bigint" ? Number(seasonId) : seasonId;
+        const oldTicketsNum =
+          typeof oldTickets === "bigint" ? Number(oldTickets) : oldTickets;
+        const newTicketsNum =
+          typeof newTickets === "bigint" ? Number(newTickets) : newTickets;
+        const totalTicketsNum =
+          typeof totalTickets === "bigint" ? Number(totalTickets) : totalTickets;
+
+        const denominator = supplyForThreshold || totalTicketsNum;
+        const oldShareBps =
+          oldTicketsNum > 0
+            ? Math.round((oldTicketsNum * 10000) / denominator)
+            : 0;
+        const newShareBps = Math.round((newTicketsNum * 10000) / denominator);
+        const thresholdBps = 100; // 1%
+
+        // Check if this event represents a threshold crossing
+        if (oldShareBps < thresholdBps && newShareBps >= thresholdBps) {
+          // Check if market already exists for this player
+          try {
+            const existingFpmm = await db.getFpmmAddress(
+              seasonIdNum,
+              player,
+            );
+            if (existingFpmm) {
+              logger.debug(
+                `   Historical: Player ${player} (season ${seasonIdNum}) already has market, skipping`,
+              );
+              continue;
+            }
+
+            logger.info(
+              `🎯 Historical threshold crossing: Player ${player} reached ${newShareBps} bps in season ${seasonIdNum}`,
+            );
+
+            // Trigger market creation
+            if (paymasterService.initialized && infoFiFactoryAddress) {
+              sseService.broadcastMarketCreationStarted({
+                seasonId: seasonIdNum,
+                player,
+                probability: newShareBps,
+              });
+
+              const result = await paymasterService.createMarket(
+                {
+                  seasonId: seasonIdNum,
+                  player,
+                  oldTickets: oldTicketsNum,
+                  newTickets: newTicketsNum,
+                  totalTickets: totalTicketsNum,
+                  infoFiFactoryAddress,
+                },
+                logger,
+              );
+
+              if (result.success) {
+                logger.info(
+                  `✅ Historical market creation confirmed: ${result.hash}`,
+                );
+                sseService.broadcastMarketCreationConfirmed({
+                  seasonId: seasonIdNum,
+                  player,
+                  transactionHash: result.hash,
+                  marketAddress: "pending",
+                });
+              } else {
+                logger.error(
+                  `❌ Historical market creation failed: ${result.error}`,
+                );
+                sseService.broadcastMarketCreationFailed({
+                  seasonId: seasonIdNum,
+                  player,
+                  error: result.error,
+                });
+
+                try {
+                  await db.logFailedMarketAttempt({
+                    seasonId: seasonIdNum,
+                    playerAddress: player,
+                    source: "HISTORICAL_SCAN",
+                    errorMessage: result.error,
+                    attempts: result.attempts,
+                  });
+                } catch (logError) {
+                  logger.warn(
+                    `   ⚠️  Failed to record failed market attempt: ${logError.message}`,
+                  );
+                }
+              }
+            } else {
+              logger.warn(
+                `   ⚠️  PaymasterService not initialized, cannot create historical market for ${player}`,
+              );
+            }
+          } catch (err) {
+            logger.error(
+              `   ❌ Error processing historical event for ${player}: ${err.message}`,
+            );
+          }
+        }
+      }
+    } else {
+      logger.info("   No historical PositionUpdate events found");
+    }
+  } catch (error) {
+    logger.error(
+      `❌ Failed to scan historical PositionUpdate events: ${error.message}`,
+    );
+    // Don't throw - continue with real-time listener
+  }
+}
 
 /**
  * Starts listening for PositionUpdate events from SOFBondingCurve
@@ -72,22 +231,40 @@ export async function startPositionUpdateListener(
     }
   }
 
-  // Fetch max supply once at listener startup
+  // Fetch max supply from bonding curve's last step (the actual cap)
   let maxSupply = null;
   try {
-    const maxSupplyBigInt = await publicClient.readContract({
-      address: raffleTokenAddress,
-      abi: erc20Abi,
-      functionName: "totalSupply",
+    const bondSteps = await publicClient.readContract({
+      address: bondingCurveAddress,
+      abi: bondingCurveAbi,
+      functionName: "getBondSteps",
     });
-    maxSupply =
-      typeof maxSupplyBigInt === "bigint"
-        ? Number(maxSupplyBigInt)
-        : maxSupplyBigInt;
-    logger.debug(`   Max supply for token ${raffleTokenAddress}: ${maxSupply}`);
+    // Last step's rangeTo is the max supply (raw token count, no decimals)
+    if (bondSteps && bondSteps.length > 0) {
+      const lastStep = bondSteps[bondSteps.length - 1];
+      maxSupply = Number(lastStep.rangeTo);
+    }
+    logger.info(
+      `   Max supply from bonding curve ${bondingCurveAddress}: ${maxSupply}`,
+    );
   } catch (error) {
-    logger.warn(`   Failed to fetch max supply: ${error.message}`);
+    logger.warn(
+      `   Failed to fetch max supply from bonding curve: ${error.message}`,
+    );
   }
+
+  // Scan for historical PositionUpdate events that may have been missed
+  await scanHistoricalPositionUpdateEvents(
+    bondingCurveAddress,
+    bondingCurveAbi,
+    raffleAddress,
+    raffleAbi,
+    infoFiFactoryAddress,
+    maxSupply,
+    paymasterService,
+    sseService,
+    logger,
+  );
 
   // Create persistent block cursor for this listener
   const blockCursor = await createBlockCursor(
