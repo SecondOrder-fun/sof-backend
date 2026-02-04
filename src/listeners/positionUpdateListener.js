@@ -272,32 +272,34 @@ export async function startPositionUpdateListener(
             }
           }
 
-          // Step 5: Check if player crossed 1% threshold and trigger market creation
-          const oldProbabilityBps =
+          // Step 5: Check if player crossed 1% threshold of MAX SUPPLY and trigger market creation
+          // NOTE: Threshold is 1% of Max Supply (token cap), NOT 1% of current supply (totalTickets)
+          const supplyForThreshold = maxSupply && maxSupply > 0 ? maxSupply : totalTicketsNum;
+          const oldShareBps =
             oldTicketsNum > 0
-              ? Math.round((oldTicketsNum * 10000) / totalTicketsNum)
+              ? Math.round((oldTicketsNum * 10000) / supplyForThreshold)
               : 0;
-          const newProbabilityBps = Math.round(
-            (newTicketsNum * 10000) / totalTicketsNum,
+          const newShareBps = Math.round(
+            (newTicketsNum * 10000) / supplyForThreshold,
           );
           const thresholdBps = 100; // 1% = 100 basis points
 
           let marketCreationTriggered = false;
           if (
-            oldProbabilityBps < thresholdBps &&
-            newProbabilityBps >= thresholdBps
+            oldShareBps < thresholdBps &&
+            newShareBps >= thresholdBps
           ) {
             // Player crossed 1% threshold - trigger market creation
             marketCreationTriggered = true;
             logger.info(
-              `🎯 Threshold crossed: Player ${player} reached ${newProbabilityBps} bps (≥1%)`,
+              `🎯 Threshold crossed: Player ${player} reached ${newShareBps} bps (≥1%)`,
             );
 
             // Broadcast market creation started event
             sseService.broadcastMarketCreationStarted({
               seasonId: seasonIdNum,
               player,
-              probability: newProbabilityBps,
+              probability: newShareBps,
             });
 
             if (paymasterService.initialized && infoFiFactoryAddress) {
@@ -387,10 +389,10 @@ export async function startPositionUpdateListener(
               `(${oldTicketsNum} → ${newTicketsNum} tickets)`,
           );
           logger.info(
-            `   Total supply: ${totalTicketsNum} | ` +
+            `   Total tickets: ${totalTicketsNum} | Max supply: ${supplyForThreshold} | ` +
               `Updated ${updatedCount} markets | ` +
               `Oracle updates: ${oracleUpdatesSuccessful}/${oracleUpdatesAttempted} | ` +
-              `Player probability: ${newProbabilityBps} bps | ` +
+              `Player probability: ${newShareBps} bps | ` +
               `Market creation: ${
                 marketCreationTriggered ? "✅ Triggered" : "⏭️  Not triggered"
               }`,
