@@ -5,6 +5,7 @@ import {
   getContractEventsInChunks,
   startContractEventPolling,
 } from "../lib/contractEventPolling.js";
+import { createBlockCursor } from "../lib/blockCursor.js";
 
 /**
  * Process a SeasonStarted event log
@@ -181,6 +182,9 @@ export async function startSeasonStartedListener(
     onSeasonCreated,
   );
 
+  // Create persistent block cursor for this listener
+  const blockCursor = await createBlockCursor(`${raffleAddress}:SeasonStarted`);
+
   const unwatch = await startContractEventPolling({
     client: publicClient,
     address: raffleAddress,
@@ -188,6 +192,7 @@ export async function startSeasonStartedListener(
     eventName: "SeasonStarted",
     pollingIntervalMs: 3_000,
     maxBlockRange: 2_000n,
+    blockCursor,
     onLogs: async (logs) => {
       for (const log of logs) {
         await processSeasonStartedLog(

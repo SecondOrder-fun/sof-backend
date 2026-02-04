@@ -5,6 +5,7 @@ import { getPaymasterService } from "../services/paymasterService.js";
 import { getSSEService } from "../services/sseService.js";
 import { raffleTransactionService } from "../services/raffleTransactionService.js";
 import { startContractEventPolling } from "../lib/contractEventPolling.js";
+import { createBlockCursor } from "../lib/blockCursor.js";
 
 // Simple ERC20 ABI for totalSupply() call
 const erc20Abi = [
@@ -88,6 +89,11 @@ export async function startPositionUpdateListener(
     logger.warn(`   Failed to fetch max supply: ${error.message}`);
   }
 
+  // Create persistent block cursor for this listener
+  const blockCursor = await createBlockCursor(
+    `${bondingCurveAddress}:PositionUpdate`,
+  );
+
   const unwatch = await startContractEventPolling({
     client: publicClient,
     address: bondingCurveAddress,
@@ -95,6 +101,7 @@ export async function startPositionUpdateListener(
     eventName: "PositionUpdate",
     pollingIntervalMs: 3_000,
     maxBlockRange: 2_000n,
+    blockCursor,
     onLogs: async (logs) => {
       for (const log of logs) {
         const { seasonId, player, oldTickets, newTickets, totalTickets } =

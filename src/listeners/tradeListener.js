@@ -14,6 +14,7 @@ import { publicClient } from "../lib/viemClient.js";
 import { oracleCallService } from "../services/oracleCallService.js";
 import { infoFiPositionService } from "../services/infoFiPositionService.js";
 import { startContractEventPolling } from "../lib/contractEventPolling.js";
+import { createBlockCursor } from "../lib/blockCursor.js";
 
 /**
  * Starts listening for Trade events from SimpleFPMM contracts
@@ -55,6 +56,9 @@ export async function startTradeListener(fpmmAddresses, fpmmAbi, logger) {
         `[TRADE_LISTENER] Setting up listener for FPMM: ${fpmmAddress}`,
       );
 
+      // Create persistent block cursor for this FPMM listener
+      const blockCursor = await createBlockCursor(`${fpmmAddress}:Trade`);
+
       const unwatch = await startContractEventPolling({
         client: publicClient,
         address: fpmmAddress,
@@ -62,6 +66,7 @@ export async function startTradeListener(fpmmAddresses, fpmmAbi, logger) {
         eventName: "Trade",
         pollingIntervalMs: 4_000,
         maxBlockRange: 2_000n,
+        blockCursor,
         onLogs: async (logs) => {
           logger.info(
             `[TRADE_LISTENER] 📥 Received ${logs.length} Trade event(s) for FPMM ${fpmmAddress}`,

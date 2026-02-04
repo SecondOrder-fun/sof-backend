@@ -314,11 +314,49 @@ async function startListeners() {
       onSeasonCreated,
     );
 
+    // Callback to clean up per-season listeners when a season completes
+    const onSeasonCompleted = async ({ seasonId }) => {
+      // Stop the PositionUpdate listener for this season
+      const posUnwatch = positionUpdateListeners.get(seasonId);
+      if (posUnwatch) {
+        posUnwatch();
+        positionUpdateListeners.delete(seasonId);
+        app.log.info(
+          `🛑 Stopped PositionUpdate listener for completed season ${seasonId}`,
+        );
+      }
+
+      // Stop any Trade listeners associated with this season's markets
+      try {
+        const markets = await db.getInfoFiMarketsBySeasonId(seasonId);
+        if (markets && markets.length > 0) {
+          for (const market of markets) {
+            const addr = market.contract_address;
+            if (addr) {
+              const tradeUnwatch = tradeListeners.get(addr);
+              if (tradeUnwatch) {
+                tradeUnwatch();
+                tradeListeners.delete(addr);
+                app.log.info(
+                  `🛑 Stopped Trade listener for FPMM ${addr} (season ${seasonId})`,
+                );
+              }
+            }
+          }
+        }
+      } catch (error) {
+        app.log.error(
+          `❌ Error cleaning up Trade listeners for season ${seasonId}: ${error.message}`,
+        );
+      }
+    };
+
     // Start SeasonCompleted listener (marks seasons as inactive when they end)
     unwatchSeasonCompleted = await startSeasonCompletedListener(
       raffleAddress,
       raffleAbi,
       app.log,
+      onSeasonCompleted,
     );
 
     // Resolve InfoFi factory address based on NETWORK (already computed above)
