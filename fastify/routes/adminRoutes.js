@@ -14,6 +14,7 @@ import {
   getAllEnabledTokens,
 } from "../../shared/farcasterNotificationService.js";
 import { historicalOddsService } from "../../shared/historicalOddsService.js";
+import { createRequireAdmin } from "../../shared/adminGuard.js";
 
 const erc20BalanceOfAbi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
@@ -23,6 +24,7 @@ const erc20BalanceOfAbi = parseAbi([
  * Admin API routes
  */
 export default async function adminRoutes(fastify) {
+  const requireAdmin = createRequireAdmin();
   // Respect DEFAULT_NETWORK from .env, with LOCAL as final fallback
   const NETWORK =
     process.env.NETWORK ||
@@ -34,7 +36,7 @@ export default async function adminRoutes(fastify) {
    * GET /api/admin/backend-wallet
    * Returns the backend/paymaster wallet address, ETH balance, SOF balance, and network info.
    */
-  fastify.get("/backend-wallet", async (_request, reply) => {
+  fastify.get("/backend-wallet", { preHandler: requireAdmin }, async (_request, reply) => {
     try {
       const chain = getChainByKey(NETWORK);
       const paymasterService = getPaymasterService(fastify.log);
@@ -107,7 +109,7 @@ export default async function adminRoutes(fastify) {
    * GET /api/admin/market-creation-stats
    * Returns aggregate statistics about InfoFi market creation.
    */
-  fastify.get("/market-creation-stats", async (_request, reply) => {
+  fastify.get("/market-creation-stats", { preHandler: requireAdmin }, async (_request, reply) => {
     try {
       // Get all markets
       const { data: markets, error: marketsErr } = await db.client
@@ -161,7 +163,7 @@ export default async function adminRoutes(fastify) {
    * Returns a list of active seasons for the ManualMarketCreation admin panel.
    * Shape: { seasons: [{ id, name, status }], count }
    */
-  fastify.get("/active-seasons", async (_request, reply) => {
+  fastify.get("/active-seasons", { preHandler: requireAdmin }, async (_request, reply) => {
     try {
       const seasons = [];
       const activeContracts = await db.getActiveSeasonContracts();
@@ -199,7 +201,7 @@ export default async function adminRoutes(fastify) {
    * Returns recent failed InfoFi market creation attempts.
    * Shape: { failedAttempts: [ { id, season_id, player_address, source, error_message, attempts, created_at, last_attempt_at } ], count }
    */
-  fastify.get("/failed-market-attempts", async (_request, reply) => {
+  fastify.get("/failed-market-attempts", { preHandler: requireAdmin }, async (_request, reply) => {
     try {
       const failedAttempts = await db.getFailedMarketAttempts(100);
       return reply.send({
@@ -224,7 +226,7 @@ export default async function adminRoutes(fastify) {
    * Uses the backend CDP smart account via PaymasterService to call
    * InfoFiMarketFactory.onPositionUpdate gaslessly.
    */
-  fastify.post("/create-market", async (request, reply) => {
+  fastify.post("/create-market", { preHandler: requireAdmin }, async (request, reply) => {
     try {
       const { seasonId, playerAddress } = request.body || {};
 
@@ -419,7 +421,7 @@ export default async function adminRoutes(fastify) {
    * Returns basic health information for the CDP Paymaster-backed smart account
    * Shape: { network, isTestnet, entryPointAddress, paymasterUrlConfigured, initialized, smartAccountAddress, initializationError }
    */
-  fastify.get("/paymaster-status", async (_request, reply) => {
+  fastify.get("/paymaster-status", { preHandler: requireAdmin }, async (_request, reply) => {
     try {
       const {
         DEFAULT_NETWORK,
@@ -485,7 +487,7 @@ export default async function adminRoutes(fastify) {
    * Returns statistics about notification tokens
    * Shape: { totalTokens, uniqueUsers, byClient: { [appFid]: count } }
    */
-  fastify.get("/notification-stats", async (_request, reply) => {
+  fastify.get("/notification-stats", { preHandler: requireAdmin }, async (_request, reply) => {
     try {
       if (!hasSupabase) {
         return reply.code(503).send({
@@ -517,7 +519,7 @@ export default async function adminRoutes(fastify) {
    * Body: { fid?: number, title: string, body: string, targetUrl?: string }
    * If fid is provided, sends to that user only. Otherwise broadcasts to all.
    */
-  fastify.post("/send-notification", async (request, reply) => {
+  fastify.post("/send-notification", { preHandler: requireAdmin }, async (request, reply) => {
     try {
       const { fid, title, body, targetUrl } = request.body || {};
 
@@ -585,7 +587,7 @@ export default async function adminRoutes(fastify) {
    * Returns list of all notification tokens (for admin viewing)
    * Shape: { tokens: [...], count }
    */
-  fastify.get("/notification-tokens", async (request, reply) => {
+  fastify.get("/notification-tokens", { preHandler: requireAdmin }, async (request, reply) => {
     try {
       if (!hasSupabase) {
         return reply.code(503).send({
@@ -626,7 +628,7 @@ export default async function adminRoutes(fastify) {
    *
    * Body (optional): { dryRun: boolean }
    */
-  fastify.post("/backfill-initial-odds", async (request, reply) => {
+  fastify.post("/backfill-initial-odds", { preHandler: requireAdmin }, async (request, reply) => {
     try {
       const { dryRun = false } = request.body || {};
       const simpleFpmmAbi = (await import("../../src/abis/SimpleFPMMAbi.js")).default;
@@ -760,7 +762,7 @@ export default async function adminRoutes(fastify) {
    * POST /api/admin/refresh-probabilities
    * Force-refresh all active market probabilities from on-chain FPMM prices
    */
-  fastify.post("/refresh-probabilities", async (request, reply) => {
+  fastify.post("/refresh-probabilities", { preHandler: requireAdmin }, async (request, reply) => {
     try {
       const simpleFpmmAbi = (await import("../../src/abis/SimpleFPMMAbi.js")).default;
 

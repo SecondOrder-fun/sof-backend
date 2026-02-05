@@ -178,6 +178,15 @@ try {
 }
 
 try {
+  await app.register((await import("./routes/authRoutes.js")).default, {
+    prefix: "/api/auth",
+  });
+  app.log.info("Mounted /api/auth");
+} catch (err) {
+  app.log.error({ err }, "Failed to mount /api/auth");
+}
+
+try {
   await app.register((await import("./routes/accessRoutes.js")).default, {
     prefix: "/api/access",
   });

@@ -13,7 +13,7 @@ export function createRequireAdmin() {
 
     const accessInfo = await getUserAccess({
       fid: request.user.fid,
-      wallet: request.user.wallet_address,
+      wallet: request.user.wallet_address || request.user.wallet,
     });
 
     if (accessInfo.level < ACCESS_LEVELS.ADMIN) {
