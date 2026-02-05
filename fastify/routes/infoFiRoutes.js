@@ -190,6 +190,70 @@ export default async function infoFiRoutes(fastify) {
   });
 
   /**
+   * GET /api/infofi/markets/:marketId/info
+   * Get market pool info (reserves and volume)
+   *
+   * Returns: { totalYesPool, totalNoPool, volume }
+   */
+  fastify.get("/markets/:marketId/info", async (request, reply) => {
+    try {
+      const { marketId } = request.params;
+
+      // Get market to find FPMM contract address
+      const { data: market, error: marketError } = await supabase
+        .from("infofi_markets")
+        .select("id, contract_address")
+        .eq("id", marketId)
+        .single();
+
+      if (marketError || !market) {
+        return reply.code(404).send({ error: "Market not found" });
+      }
+
+      // If no FPMM contract yet, return zeros
+      if (!market.contract_address) {
+        return reply.send({
+          totalYesPool: "0",
+          totalNoPool: "0",
+          volume: "0",
+        });
+      }
+
+      // Get volume from positions table (sum of all amounts traded)
+      const { data: volumeData, error: volumeError } = await supabase
+        .from("infofi_positions")
+        .select("amount")
+        .eq("market_id", marketId);
+
+      let volume = 0n;
+      if (!volumeError && volumeData) {
+        for (const pos of volumeData) {
+          try {
+            volume += BigInt(pos.amount || 0);
+          } catch {
+            // Skip invalid amounts
+          }
+        }
+      }
+
+      // For pool reserves, we'd need to call the FPMM contract
+      // For now, return volume and placeholder for pools
+      // TODO: Add viem client to read FPMM yesReserve/noReserve
+      return reply.send({
+        totalYesPool: "0", // Would need contract call
+        totalNoPool: "0", // Would need contract call
+        volume: volume.toString(),
+      });
+    } catch (error) {
+      fastify.log.error({ error }, "Failed to fetch market info");
+      return reply.code(500).send({
+        error: "Failed to fetch market info",
+        details: error.message,
+      });
+    }
+  });
+
+  /**
    * GET /api/infofi/markets/:marketId/history
    * Get historical odds for a market
    *
