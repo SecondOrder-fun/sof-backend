@@ -163,7 +163,6 @@ class InfoFiPositionService {
             .from("infofi_markets")
             .update({
               current_probability_bps: currentProbabilityBps,
-              current_probability: currentProbabilityBps,
               updated_at: new Date().toISOString(),
             })
             .eq("id", marketId);
@@ -263,7 +262,6 @@ class InfoFiPositionService {
 
       if (currentProbabilityBps !== null) {
         updateData.current_probability_bps = currentProbabilityBps;
-        updateData.current_probability = currentProbabilityBps;
         updateData.updated_at = new Date().toISOString();
       }
 

@@ -995,23 +995,25 @@ export class DatabaseService {
    * @returns {Promise<Object|null>} Updated market or null
    */
   async updateMarketProbabilityByFpmm(fpmmAddress, newProbabilityBps) {
+    const normalizedAddr = fpmmAddress.toLowerCase();
     const { data, error } = await this.client
       .from("infofi_markets")
       .update({
         current_probability_bps: newProbabilityBps,
-        current_probability: newProbabilityBps,
         updated_at: new Date().toISOString(),
       })
-      .eq("contract_address", fpmmAddress.toLowerCase())
+      .eq("contract_address", normalizedAddr)
       .eq("is_active", true)
-      .select()
-      .single();
+      .select();
 
     if (error) {
-      // Don't throw - market might not exist or race condition
+      console.error(
+        `[updateMarketProbabilityByFpmm] Error updating ${normalizedAddr}: ${error.message}`,
+        { code: error.code, details: error.details, hint: error.hint }
+      );
       return null;
     }
-    return data;
+    return data && data.length > 0 ? data[0] : null;
   }
 
   /**
