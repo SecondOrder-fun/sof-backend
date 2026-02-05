@@ -104,27 +104,7 @@ export async function startTradeListener(fpmmAddresses, fpmmAbi, logger) {
                 `[TRADE_LISTENER] ✓ Market sentiment (yesPrice): ${sentiment} bps`,
               );
 
-              // Update oracle with new sentiment
-              logger.info(
-                `[TRADE_LISTENER] Step 2/3: Updating oracle sentiment...`,
-              );
-              const result = await oracleCallService.updateMarketSentiment(
-                fpmmAddress,
-                sentiment,
-                logger,
-              );
-
-              if (result.success) {
-                logger.info(
-                  `[TRADE_LISTENER] ✓ Oracle updated: ${sentiment} bps (${result.hash})`,
-                );
-              } else {
-                logger.warn(
-                  `[TRADE_LISTENER] ⚠️  Oracle update failed: ${result.error}`,
-                );
-              }
-
-              // Update market probability in database
+              // Step 2/3: Update DB probability FIRST (fast, reliable)
               try {
                 const dbUpdate = await db.updateMarketProbabilityByFpmm(
                   fpmmAddress,
@@ -142,6 +122,27 @@ export async function startTradeListener(fpmmAddresses, fpmmAbi, logger) {
               } catch (dbError) {
                 logger.error(
                   `[TRADE_LISTENER] ❌ Failed to update DB probability: ${dbError.message}`,
+                );
+              }
+
+              // Step 3/3: Update on-chain oracle (may retry with backoff)
+              // Runs AFTER DB update so API stays responsive
+              logger.info(
+                `[TRADE_LISTENER] Step 3/3: Updating oracle sentiment...`,
+              );
+              const result = await oracleCallService.updateMarketSentiment(
+                fpmmAddress,
+                sentiment,
+                logger,
+              );
+
+              if (result.success) {
+                logger.info(
+                  `[TRADE_LISTENER] ✓ Oracle updated: ${sentiment} bps (${result.hash})`,
+                );
+              } else {
+                logger.warn(
+                  `[TRADE_LISTENER] ⚠️  Oracle update failed: ${result.error}`,
                 );
               }
 
