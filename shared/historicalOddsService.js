@@ -82,6 +82,31 @@ class HistoricalOddsService {
       const now = Date.now();
       const minScore = this._getRangeStart(range, now);
 
+      // For non-ALL ranges, prepend the last data point before the window
+      // so the graph has a "carry-forward" anchor at the left edge
+      let anchorPoint = null;
+      if (range !== "ALL" && minScore > 0) {
+        const anchorRaw = await this.redis.zrevrangebyscore(
+          key,
+          minScore - 1,
+          0,
+          "WITHSCORES",
+          "LIMIT",
+          0,
+          1,
+        );
+        if (anchorRaw.length >= 2) {
+          try {
+            const parsed = JSON.parse(anchorRaw[0]);
+            // Project the anchor to the range start time so the graph
+            // begins at the left edge with the last known value
+            anchorPoint = { ...parsed, timestamp: minScore };
+          } catch (_) {
+            // skip malformed anchor
+          }
+        }
+      }
+
       const raw = await this.redis.zrangebyscore(
         key,
         minScore,
@@ -90,6 +115,12 @@ class HistoricalOddsService {
       );
 
       const dataPoints = [];
+
+      // Insert anchor as the first point if we have one
+      if (anchorPoint) {
+        dataPoints.push(anchorPoint);
+      }
+
       for (let i = 0; i < raw.length; i += 2) {
         try {
           const point = JSON.parse(raw[i]);
