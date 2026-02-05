@@ -53,7 +53,7 @@ export default async function adminRoutes(fastify) {
 
       if (paymasterService.initialized) {
         try {
-          walletAddress = paymasterService.getSmartAccountAddress();
+          walletAddress = paymasterService.getWalletAddress();
         } catch (_err) {
           // ignore
         }
@@ -455,7 +455,7 @@ export default async function adminRoutes(fastify) {
 
       if (initialized) {
         try {
-          smartAccountAddress = paymasterService.getSmartAccountAddress();
+          smartAccountAddress = paymasterService.getWalletAddress();
         } catch (err) {
           initializationError = initializationError || err.message;
         }
