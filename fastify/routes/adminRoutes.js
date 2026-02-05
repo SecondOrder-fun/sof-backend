@@ -2,8 +2,10 @@
 // Admin routes for manual InfoFi market creation and season management
 
 import process from "node:process";
+import { parseAbi, formatEther } from "viem";
 import { db, hasSupabase } from "../../shared/supabaseClient.js";
 import { publicClient } from "../../src/lib/viemClient.js";
+import { getChainByKey } from "../../src/config/chain.js";
 import raffleAbi from "../../src/abis/RaffleAbi.js";
 import { getPaymasterService } from "../../src/services/paymasterService.js";
 import {
@@ -11,6 +13,10 @@ import {
   sendNotificationToAll,
   getAllEnabledTokens,
 } from "../../shared/farcasterNotificationService.js";
+
+const erc20BalanceOfAbi = parseAbi([
+  "function balanceOf(address) view returns (uint256)",
+]);
 
 /**
  * Admin API routes
@@ -22,6 +28,132 @@ export default async function adminRoutes(fastify) {
     process.env.DEFAULT_NETWORK ||
     process.env.VITE_DEFAULT_NETWORK ||
     "LOCAL";
+
+  /**
+   * GET /api/admin/backend-wallet
+   * Returns the backend/paymaster wallet address, ETH balance, SOF balance, and network info.
+   */
+  fastify.get("/backend-wallet", async (_request, reply) => {
+    try {
+      const chain = getChainByKey(NETWORK);
+      const paymasterService = getPaymasterService(fastify.log);
+
+      let walletAddress = null;
+      let balanceEth = 0;
+      let sofBalance = 0;
+
+      // Try to get the smart account address from paymaster
+      if (!paymasterService.initialized) {
+        try {
+          await paymasterService.initialize();
+        } catch (_err) {
+          // Will fall back to null address
+        }
+      }
+
+      if (paymasterService.initialized) {
+        try {
+          walletAddress = paymasterService.getSmartAccountAddress();
+        } catch (_err) {
+          // ignore
+        }
+      }
+
+      // If no smart account, try the plain backend wallet from env
+      if (!walletAddress) {
+        walletAddress = process.env.BACKEND_WALLET_ADDRESS || null;
+      }
+
+      if (walletAddress) {
+        try {
+          const rawBal = await publicClient.getBalance({ address: walletAddress });
+          balanceEth = parseFloat(formatEther(rawBal));
+        } catch (_err) {
+          // RPC may be down
+        }
+
+        // Read SOF balance if token address configured
+        const sofAddress = chain.sof;
+        if (sofAddress) {
+          try {
+            const rawSof = await publicClient.readContract({
+              address: sofAddress,
+              abi: erc20BalanceOfAbi,
+              functionName: "balanceOf",
+              args: [walletAddress],
+            });
+            sofBalance = parseFloat(formatEther(rawSof));
+          } catch (_err) {
+            // ignore
+          }
+        }
+      }
+
+      return reply.send({
+        address: walletAddress,
+        balanceEth,
+        sofBalance,
+        network: chain.name,
+        chainId: chain.id,
+      });
+    } catch (error) {
+      fastify.log.error({ error }, "Failed to fetch backend wallet info");
+      return reply.code(500).send({ error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/market-creation-stats
+   * Returns aggregate statistics about InfoFi market creation.
+   */
+  fastify.get("/market-creation-stats", async (_request, reply) => {
+    try {
+      // Get all markets
+      const { data: markets, error: marketsErr } = await db.client
+        .from("infofi_markets")
+        .select("id, contract_address, created_at, is_active")
+        .order("created_at", { ascending: false });
+
+      if (marketsErr) throw new Error(marketsErr.message);
+
+      const allMarkets = markets || [];
+      const totalCreated = allMarkets.length;
+      const withContract = allMarkets.filter((m) => m.contract_address).length;
+      const successRate = totalCreated > 0
+        ? Math.round((withContract / totalCreated) * 100)
+        : 0;
+
+      // Get failed attempts count
+      let failedAttempts = 0;
+      try {
+        const { count, error: failErr } = await db.client
+          .from("infofi_failed_market_attempts")
+          .select("id", { count: "exact", head: true });
+        if (!failErr) failedAttempts = count || 0;
+      } catch (_err) {
+        // Table may not exist
+      }
+
+      // Recent markets (last 10)
+      const recentMarkets = allMarkets.slice(0, 10).map((m) => ({
+        id: m.id,
+        hasContract: Boolean(m.contract_address),
+        createdAt: m.created_at,
+        isActive: m.is_active,
+      }));
+
+      return reply.send({
+        totalCreated,
+        successRate,
+        totalGasEth: "0.0000", // Gasless via paymaster
+        failedAttempts,
+        recentMarkets,
+      });
+    } catch (error) {
+      fastify.log.error({ error }, "Failed to fetch market creation stats");
+      return reply.code(500).send({ error: error.message });
+    }
+  });
 
   /**
    * GET /api/admin/active-seasons
