@@ -13,6 +13,7 @@ import {
   sendNotificationToAll,
   getAllEnabledTokens,
 } from "../../shared/farcasterNotificationService.js";
+import { historicalOddsService } from "../../shared/historicalOddsService.js";
 
 const erc20BalanceOfAbi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
@@ -612,6 +613,144 @@ export default async function adminRoutes(fastify) {
       fastify.log.error({ error }, "Failed to fetch notification tokens");
       return reply.code(500).send({
         error: "Failed to fetch notification tokens",
+        details: error.message,
+      });
+    }
+  });
+
+  /**
+   * POST /api/admin/backfill-initial-odds
+   * Backfill the initial odds data point for all markets that are missing it.
+   * Reads the FPMM getPrices() at a block near creation time and inserts
+   * that as the first historical odds data point (the "Market Start" point).
+   *
+   * Body (optional): { dryRun: boolean }
+   */
+  fastify.post("/backfill-initial-odds", async (request, reply) => {
+    try {
+      const { dryRun = false } = request.body || {};
+      const simpleFpmmAbi = (await import("../../src/abis/SimpleFPMMAbi.js")).default;
+
+      // Get all markets with contract addresses
+      const { data: markets, error } = await db.client
+        .from("infofi_markets")
+        .select("id, season_id, raffle_id, contract_address, created_at, current_probability_bps")
+        .not("contract_address", "is", null)
+        .order("created_at", { ascending: true });
+
+      if (error) throw new Error(error.message);
+      if (!markets || markets.length === 0) {
+        return reply.send({ message: "No markets found", backfilled: 0 });
+      }
+
+      // Get current block info for estimating historical blocks
+      const latestBlock = await publicClient.getBlock({ blockTag: "latest" });
+      const currentBlockNumber = Number(latestBlock.number);
+      const currentTimestamp = Number(latestBlock.timestamp);
+
+      const results = [];
+
+      for (const market of markets) {
+        const seasonId = market.season_id ?? market.raffle_id ?? 0;
+        const marketId = market.id;
+
+        try {
+          // Check if this market already has odds history
+          const stats = await historicalOddsService.getStats(seasonId, marketId);
+          const createdAtMs = new Date(market.created_at).getTime();
+
+          // If the oldest data point is within 60s of creation, skip (already has initial point)
+          if (stats.count > 0 && stats.oldestTimestamp && Math.abs(stats.oldestTimestamp - createdAtMs) < 60000) {
+            results.push({
+              marketId,
+              status: "skipped",
+              reason: "Initial odds already recorded",
+              existingOldest: stats.oldestTimestamp,
+              createdAt: createdAtMs,
+            });
+            continue;
+          }
+
+          // Estimate the block number at creation time
+          const createdAtSec = Math.floor(createdAtMs / 1000);
+          const secondsAgo = currentTimestamp - createdAtSec;
+          const blocksAgo = Math.floor(secondsAgo / 2); // ~2s per block on Base Sepolia
+          const estimatedBlock = currentBlockNumber - blocksAgo;
+
+          // Try to read FPMM prices at a block slightly after creation
+          // Add 100 blocks (~200s buffer) to ensure contract exists
+          const targetBlock = estimatedBlock + 100;
+
+          let initialYesBps;
+          let initialNoBps;
+          let source;
+
+          try {
+            const [yesPrice, noPrice] = await publicClient.readContract({
+              address: market.contract_address,
+              abi: simpleFpmmAbi,
+              functionName: "getPrices",
+              blockNumber: BigInt(targetBlock),
+            });
+            initialYesBps = Number(yesPrice);
+            initialNoBps = Number(noPrice);
+            source = `block_${targetBlock}`;
+          } catch (blockReadError) {
+            // Fallback: use stored probability from DB (set at creation time)
+            fastify.log.warn(
+              `[BACKFILL] Could not read FPMM at block ${targetBlock} for market ${marketId}: ${blockReadError.message}. Using DB probability.`
+            );
+            initialYesBps = market.current_probability_bps || 5000;
+            initialNoBps = 10000 - initialYesBps;
+            source = "db_fallback";
+          }
+
+          if (!dryRun) {
+            await historicalOddsService.recordOddsUpdate(seasonId, marketId, {
+              timestamp: createdAtMs,
+              yes_bps: initialYesBps,
+              no_bps: initialNoBps,
+              hybrid_bps: initialYesBps,
+              raffle_bps: 0,
+              sentiment_bps: 0,
+            });
+          }
+
+          results.push({
+            marketId,
+            seasonId,
+            status: dryRun ? "dry_run" : "backfilled",
+            initialYesBps,
+            initialNoBps,
+            createdAt: market.created_at,
+            createdAtMs,
+            source,
+            estimatedBlock: targetBlock,
+          });
+
+          fastify.log.info(
+            `[BACKFILL] ${dryRun ? "[DRY RUN] " : ""}Market ${marketId}: initial odds ${initialYesBps}/${initialNoBps} bps at ${market.created_at} (source: ${source})`
+          );
+        } catch (marketError) {
+          results.push({
+            marketId,
+            status: "error",
+            error: marketError.message,
+          });
+        }
+      }
+
+      const backfilledCount = results.filter((r) => r.status === "backfilled").length;
+      return reply.send({
+        backfilled: backfilledCount,
+        total: markets.length,
+        dryRun,
+        results,
+      });
+    } catch (error) {
+      fastify.log.error({ error }, "Failed to backfill initial odds");
+      return reply.code(500).send({
+        error: "Failed to backfill initial odds",
         details: error.message,
       });
     }

@@ -3,6 +3,7 @@ import { db } from "../../shared/supabaseClient.js";
 import SOFBondingCurveAbi from "../abis/SOFBondingCurveAbi.js";
 import { startContractEventPolling } from "../lib/contractEventPolling.js";
 import { createBlockCursor } from "../lib/blockCursor.js";
+import { historicalOddsService } from "../../shared/historicalOddsService.js";
 
 // Market type hash mapping (matches contract constants)
 // These are keccak256 hashes of the market type strings
@@ -224,7 +225,7 @@ export async function startMarketCreatedListener(
 
             // Create market entry with all required fields
             const timestamp = new Date().toISOString();
-            await db.createInfoFiMarket({
+            const createdMarket = await db.createInfoFiMarket({
               season_id: seasonIdNum,
               player_address: player,
               player_id: playerId,
@@ -246,6 +247,28 @@ export async function startMarketCreatedListener(
               ).toFixed(2)}%)`,
             );
             logger.info(`   Status: Market created successfully`);
+
+            // Record initial odds as the first historical data point
+            // This is the "Market Start" point on the odds graph
+            if (createdMarket?.id) {
+              try {
+                await historicalOddsService.recordOddsUpdate(seasonIdNum, createdMarket.id, {
+                  timestamp: Date.now(),
+                  yes_bps: probabilityBps,
+                  no_bps: 10000 - probabilityBps,
+                  hybrid_bps: probabilityBps,
+                  raffle_bps: 0,
+                  sentiment_bps: 0,
+                });
+                logger.info(
+                  `[MARKET_CREATED] ✓ Initial odds recorded: ${probabilityBps} bps (market ${createdMarket.id})`,
+                );
+              } catch (oddsError) {
+                logger.warn(
+                  `[MARKET_CREATED] ⚠️  Failed to record initial odds: ${oddsError.message}`,
+                );
+              }
+            }
           } catch (dbError) {
             logger.error(
               `❌ Failed to create market in database: ${dbError.message}`,
