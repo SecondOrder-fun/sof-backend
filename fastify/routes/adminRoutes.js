@@ -484,4 +484,89 @@ export default async function adminRoutes(fastify) {
       });
     }
   });
+
+  /**
+   * POST /api/admin/refresh-probabilities
+   * Force-refresh all active market probabilities from on-chain FPMM prices
+   */
+  fastify.post("/refresh-probabilities", async (request, reply) => {
+    try {
+      const simpleFpmmAbi = (await import("../../src/abis/SimpleFPMMAbi.js")).default;
+
+      // Get all active markets
+      const { data: markets, error } = await db.client
+        .from("infofi_markets")
+        .select("id, contract_address, current_probability_bps")
+        .eq("is_active", true)
+        .not("contract_address", "is", null);
+
+      if (error) throw new Error(error.message);
+      if (!markets || markets.length === 0) {
+        return reply.send({ message: "No active markets", updated: 0 });
+      }
+
+      const results = [];
+
+      for (const market of markets) {
+        try {
+          // Read on-chain prices
+          const [yesPrice, noPrice] = await publicClient.readContract({
+            address: market.contract_address,
+            abi: simpleFpmmAbi,
+            functionName: "getPrices",
+          });
+
+          const newProbBps = Number(yesPrice);
+
+          // Update DB
+          const { data: updated, error: updateError } = await db.client
+            .from("infofi_markets")
+            .update({
+              current_probability_bps: newProbBps,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", market.id)
+            .select("id, current_probability_bps, updated_at")
+            .single();
+
+          if (updateError) {
+            results.push({
+              id: market.id,
+              address: market.contract_address,
+              error: updateError.message,
+              old: market.current_probability_bps,
+              new: newProbBps,
+            });
+          } else {
+            results.push({
+              id: market.id,
+              address: market.contract_address,
+              old: market.current_probability_bps,
+              new: newProbBps,
+              updated: true,
+            });
+          }
+        } catch (marketError) {
+          results.push({
+            id: market.id,
+            address: market.contract_address,
+            error: marketError.message,
+          });
+        }
+      }
+
+      const successCount = results.filter((r) => r.updated).length;
+      return reply.send({
+        updated: successCount,
+        total: markets.length,
+        results,
+      });
+    } catch (error) {
+      fastify.log.error({ error }, "Failed to refresh probabilities");
+      return reply.code(500).send({
+        error: "Failed to refresh probabilities",
+        details: error.message,
+      });
+    }
+  });
 }
