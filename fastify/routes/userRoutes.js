@@ -66,6 +66,8 @@ export async function userRoutes(fastify, options) {
 
       // Query positions from infofi_positions table joined with markets
       // Using ACTUAL database schema from migrations
+      // Use explicit FK hint (!infofi_positions_market_id_fkey) to avoid
+      // PostgREST ambiguity — table has multiple FKs (market_id, player_id)
       const { data: positions, error } = await db.client
         .from("infofi_positions")
         .select(
@@ -77,7 +79,7 @@ export async function userRoutes(fastify, options) {
           amount,
           price,
           created_at,
-          infofi_markets (
+          infofi_markets!infofi_positions_market_id_fkey (
             id,
             season_id,
             player_address,
@@ -94,16 +96,15 @@ export async function userRoutes(fastify, options) {
           "Failed to fetch positions from database"
         );
 
-        // Return empty array instead of error if schema is not fully migrated yet
-        // or if join fails because there are no markets / positions tables
+        // Return empty array only if the table genuinely doesn't exist
+        // (schema not fully migrated). Don't swallow other errors.
         const msg = error.message || "";
         if (
           msg.includes("does not exist") ||
-          msg.includes("infofi_positions") ||
           msg.includes("schema cache")
         ) {
           fastify.log.info(
-            { address },
+            { address, errorMsg: msg },
             "No positions/markets table yet, returning empty positions"
           );
           return reply.send({
