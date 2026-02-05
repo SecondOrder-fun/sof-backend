@@ -16,6 +16,7 @@ import { infoFiPositionService } from "../services/infoFiPositionService.js";
 import { startContractEventPolling } from "../lib/contractEventPolling.js";
 import { createBlockCursor } from "../lib/blockCursor.js";
 import { db } from "../../shared/supabaseClient.js";
+import { historicalOddsService } from "../../shared/historicalOddsService.js";
 
 /**
  * Starts listening for Trade events from SimpleFPMM contracts
@@ -114,6 +115,26 @@ export async function startTradeListener(fpmmAddresses, fpmmAbi, logger) {
                   logger.info(
                     `[TRADE_LISTENER] ✓ DB probability updated: ${sentiment} bps (market ${dbUpdate.id})`,
                   );
+
+                  // Record odds history data point for charts
+                  try {
+                    const seasonId = dbUpdate.season_id ?? dbUpdate.raffle_id ?? 0;
+                    await historicalOddsService.recordOddsUpdate(seasonId, dbUpdate.id, {
+                      timestamp: Date.now(),
+                      yes_bps: sentiment,
+                      no_bps: 10000 - sentiment,
+                      hybrid_bps: sentiment,
+                      raffle_bps: 0,
+                      sentiment_bps: 0,
+                    });
+                    logger.info(
+                      `[TRADE_LISTENER] ✓ Odds history recorded: ${sentiment} bps (market ${dbUpdate.id})`,
+                    );
+                  } catch (oddsError) {
+                    logger.warn(
+                      `[TRADE_LISTENER] ⚠️  Failed to record odds history: ${oddsError.message}`,
+                    );
+                  }
                 } else {
                   logger.warn(
                     `[TRADE_LISTENER] ⚠️  DB probability update returned null for ${fpmmAddress}`,

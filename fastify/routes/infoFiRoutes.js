@@ -191,6 +191,126 @@ export default async function infoFiRoutes(fastify) {
   });
 
   /**
+   * GET /api/infofi/markets/:marketId/trades
+   * Get recent trades for a market
+   *
+   * Query params:
+   * - limit: Max results (default 50, max 100)
+   *
+   * Returns: { trades: [...] }
+   */
+  fastify.get("/markets/:marketId/trades", async (request, reply) => {
+    try {
+      const { marketId } = request.params;
+      const limit = Math.min(parseInt(request.query.limit) || 50, 100);
+
+      const { data, error } = await supabase
+        .from("infofi_positions")
+        .select("id, market_id, user_address, outcome, amount, price, tx_hash, created_at")
+        .eq("market_id", marketId)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+
+      if (error) {
+        fastify.log.error({ error }, "Failed to fetch market trades");
+        return reply.code(500).send({
+          error: "Failed to fetch market trades",
+          details: error.message,
+        });
+      }
+
+      return reply.send({ trades: data || [] });
+    } catch (error) {
+      fastify.log.error({ error }, "Unexpected error fetching market trades");
+      return reply.code(500).send({
+        error: "Internal server error",
+        details: error.message,
+      });
+    }
+  });
+
+  /**
+   * GET /api/infofi/markets/:marketId/holders
+   * Get top holders for a market grouped by outcome
+   *
+   * Returns: { yes: [{address, total_amount}], no: [{address, total_amount}] }
+   */
+  fastify.get("/markets/:marketId/holders", async (request, reply) => {
+    try {
+      const { marketId } = request.params;
+
+      // Get top YES holders
+      const { data: yesData, error: yesError } = await supabase
+        .rpc("get_top_holders_by_outcome", {
+          p_market_id: parseInt(marketId),
+          p_outcome: "YES",
+          p_limit: 3,
+        });
+
+      // Get top NO holders
+      const { data: noData, error: noError } = await supabase
+        .rpc("get_top_holders_by_outcome", {
+          p_market_id: parseInt(marketId),
+          p_outcome: "NO",
+          p_limit: 3,
+        });
+
+      // If RPC function doesn't exist, fall back to raw queries
+      if (yesError || noError) {
+        fastify.log.warn("RPC get_top_holders_by_outcome not available, using raw queries");
+
+        const { data: yesRaw, error: yesRawErr } = await supabase
+          .from("infofi_positions")
+          .select("user_address, amount")
+          .eq("market_id", marketId)
+          .eq("outcome", "YES");
+
+        const { data: noRaw, error: noRawErr } = await supabase
+          .from("infofi_positions")
+          .select("user_address, amount")
+          .eq("market_id", marketId)
+          .eq("outcome", "NO");
+
+        if (yesRawErr || noRawErr) {
+          return reply.code(500).send({
+            error: "Failed to fetch holders",
+            details: (yesRawErr || noRawErr).message,
+          });
+        }
+
+        // Aggregate in JS
+        const aggregate = (positions) => {
+          const map = {};
+          for (const pos of positions || []) {
+            const addr = pos.user_address;
+            map[addr] = (map[addr] || 0) + parseFloat(pos.amount || 0);
+          }
+          return Object.entries(map)
+            .map(([address, total_amount]) => ({ address, total_amount }))
+            .sort((a, b) => b.total_amount - a.total_amount)
+            .slice(0, 3);
+        };
+
+        return reply.send({
+          yes: aggregate(yesRaw),
+          no: aggregate(noRaw),
+        });
+      }
+
+      return reply.send({
+        yes: (yesData || []).map(r => ({ address: r.user_address, total_amount: r.total_amount })),
+        no: (noData || []).map(r => ({ address: r.user_address, total_amount: r.total_amount })),
+      });
+    } catch (error) {
+      fastify.log.error({ error }, "Unexpected error fetching market holders");
+      return reply.code(500).send({
+        error: "Internal server error",
+        details: error.message,
+      });
+    }
+  });
+
+  /**
    * GET /api/infofi/markets/:marketId/info
    * Get market pool info (reserves and volume)
    *

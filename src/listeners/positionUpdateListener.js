@@ -10,6 +10,7 @@ import {
   startContractEventPolling,
 } from "../lib/contractEventPolling.js";
 import { createBlockCursor } from "../lib/blockCursor.js";
+import { historicalOddsService } from "../../shared/historicalOddsService.js";
 
 /**
  * Scan for historical PositionUpdate events that may have been missed
@@ -480,6 +481,28 @@ export async function startPositionUpdateListener(
                 } else {
                   logger.warn(
                     `   ⚠️  Oracle update failed for ${playerAddr}: ${result.error}`,
+                  );
+                }
+
+                // Record odds history for chart data
+                try {
+                  const marketRecord = await db.getInfoFiMarketBySeasonAndPlayer(
+                    seasonIdNum,
+                    playerAddr,
+                  );
+                  if (marketRecord) {
+                    await historicalOddsService.recordOddsUpdate(seasonIdNum, marketRecord.id, {
+                      timestamp: Date.now(),
+                      yes_bps: newBps,
+                      no_bps: 10000 - newBps,
+                      hybrid_bps: newBps,
+                      raffle_bps: 0,
+                      sentiment_bps: 0,
+                    });
+                  }
+                } catch (oddsError) {
+                  logger.warn(
+                    `   ⚠️  Failed to record odds history for ${playerAddr}: ${oddsError.message}`,
                   );
                 }
               }

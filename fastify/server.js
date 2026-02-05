@@ -10,6 +10,7 @@ import { startPositionUpdateListener } from "../src/listeners/positionUpdateList
 import { startMarketCreatedListener } from "../src/listeners/marketCreatedListener.js";
 import { startTradeListener } from "../src/listeners/tradeListener.js";
 import { infoFiPositionService } from "../src/services/infoFiPositionService.js";
+import { historicalOddsService } from "../shared/historicalOddsService.js";
 import raffleAbi from "../src/abis/RaffleAbi.js";
 import sofBondingCurveAbi from "../src/abis/SOFBondingCurveAbi.js";
 import infoFiMarketFactoryAbi from "../src/abis/InfoFiMarketFactoryAbi.js";
@@ -454,6 +455,61 @@ async function syncHistoricalPositions() {
   }
 }
 
+/**
+ * Seed initial odds data points for all active markets
+ * Ensures charts have at least one data point even before trades happen
+ */
+async function seedInitialOddsHistory() {
+  try {
+    app.log.info("📊 Seeding initial odds history for active markets...");
+
+    const { data: markets, error } = await db.client
+      .from("infofi_markets")
+      .select("id, season_id, current_probability_bps")
+      .eq("is_active", true);
+
+    if (error) {
+      app.log.error(`Failed to fetch markets for odds seeding: ${error.message}`);
+      return;
+    }
+
+    if (!markets || markets.length === 0) {
+      app.log.info("No active markets to seed odds for");
+      return;
+    }
+
+    let seeded = 0;
+    for (const market of markets) {
+      try {
+        const seasonId = market.season_id ?? 0;
+        const probBps = market.current_probability_bps ?? 5000;
+
+        // Check if there are already data points
+        const stats = await historicalOddsService.getStats(seasonId, market.id);
+        if (stats.count > 0) {
+          continue; // Already has data, skip
+        }
+
+        await historicalOddsService.recordOddsUpdate(seasonId, market.id, {
+          timestamp: Date.now(),
+          yes_bps: probBps,
+          no_bps: 10000 - probBps,
+          hybrid_bps: probBps,
+          raffle_bps: 0,
+          sentiment_bps: 0,
+        });
+        seeded++;
+      } catch (seedError) {
+        app.log.warn(`Failed to seed odds for market ${market.id}: ${seedError.message}`);
+      }
+    }
+
+    app.log.info(`✅ Seeded odds history for ${seeded} market(s) (${markets.length} total active)`);
+  } catch (error) {
+    app.log.error(`Failed to seed odds history: ${error.message}`);
+  }
+}
+
 // Start server
 const PORT = process.env.PORT || 3000;
 
@@ -471,6 +527,11 @@ try {
   // Sync historical positions in background (non-blocking)
   syncHistoricalPositions().catch((err) => {
     app.log.error({ err }, "Failed to sync historical positions");
+  });
+
+  // Seed initial odds history for charts (non-blocking)
+  seedInitialOddsHistory().catch((err) => {
+    app.log.error({ err }, "Failed to seed initial odds history");
   });
 
   app.log.info("✅ Server ready - listeners and sync starting in background");
