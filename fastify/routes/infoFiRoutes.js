@@ -1,5 +1,6 @@
 // backend/fastify/routes/infoFiRoutes.js
 import { supabase, db } from "../../shared/supabaseClient.js";
+import { publicClient } from "../../src/lib/viemClient.js";
 import { infoFiPositionService } from "../../src/services/infoFiPositionService.js";
 import {
   historicalOddsService,
@@ -193,6 +194,9 @@ export default async function infoFiRoutes(fastify) {
    * GET /api/infofi/markets/:marketId/info
    * Get market pool info (reserves and volume)
    *
+   * Returns all values in WEI (raw 18-decimal BigInt strings) for frontend compatibility.
+   * Frontend uses formatUnits(value, 18) to display human-readable amounts.
+   *
    * Returns: { totalYesPool, totalNoPool, volume }
    */
   fastify.get("/markets/:marketId/info", async (request, reply) => {
@@ -219,30 +223,67 @@ export default async function infoFiRoutes(fastify) {
         });
       }
 
-      // Get volume from positions table (sum of all amounts traded)
+      // Read on-chain FPMM reserves
+      let totalYesPool = "0";
+      let totalNoPool = "0";
+      try {
+        const simpleFpmmAbi = (await import("../../src/abis/SimpleFPMMAbi.js")).default;
+        const [yesReserve, noReserve] = await Promise.all([
+          publicClient.readContract({
+            address: market.contract_address,
+            abi: simpleFpmmAbi,
+            functionName: "yesReserve",
+          }),
+          publicClient.readContract({
+            address: market.contract_address,
+            abi: simpleFpmmAbi,
+            functionName: "noReserve",
+          }),
+        ]);
+        totalYesPool = yesReserve.toString();
+        totalNoPool = noReserve.toString();
+      } catch (chainError) {
+        fastify.log.warn(
+          { chainError: chainError.message, address: market.contract_address },
+          "Failed to read FPMM reserves from chain"
+        );
+      }
+
+      // Get volume from positions table (sum of all SOF amounts traded)
+      // Amounts are stored as human-readable (e.g. "10" = 10 SOF)
+      // Convert to wei for frontend compatibility
       const { data: volumeData, error: volumeError } = await supabase
         .from("infofi_positions")
         .select("amount")
         .eq("market_id", marketId);
 
-      let volume = 0n;
+      let volumeWei = 0n;
+      const WEI = 10n ** 18n;
       if (!volumeError && volumeData) {
         for (const pos of volumeData) {
           try {
-            volume += BigInt(pos.amount || 0);
+            // amount is stored as human-readable string like "10" or "10.5"
+            // Convert to wei: parseFloat → multiply by 1e18
+            const humanAmount = parseFloat(pos.amount || "0");
+            if (humanAmount > 0) {
+              // Use integer math to avoid floating point issues
+              // Multiply whole part and fractional part separately
+              const wholePart = BigInt(Math.floor(humanAmount));
+              const fracPart = BigInt(
+                Math.round((humanAmount - Math.floor(humanAmount)) * 1e18)
+              );
+              volumeWei += wholePart * WEI + fracPart;
+            }
           } catch {
             // Skip invalid amounts
           }
         }
       }
 
-      // For pool reserves, we'd need to call the FPMM contract
-      // For now, return volume and placeholder for pools
-      // TODO: Add viem client to read FPMM yesReserve/noReserve
       return reply.send({
-        totalYesPool: "0", // Would need contract call
-        totalNoPool: "0", // Would need contract call
-        volume: volume.toString(),
+        totalYesPool,
+        totalNoPool,
+        volume: volumeWei.toString(),
       });
     } catch (error) {
       fastify.log.error({ error }, "Failed to fetch market info");
@@ -581,7 +622,27 @@ export default async function infoFiRoutes(fastify) {
         parseInt(marketId),
       );
 
-      return netPosition;
+      // Convert human-readable amounts to wei for frontend compatibility
+      // Frontend uses BigInt() + formatUnits(value, 18)
+      const toWei = (humanStr) => {
+        const num = parseFloat(humanStr || "0");
+        if (num === 0) return "0";
+        const wholePart = BigInt(Math.floor(Math.abs(num)));
+        const fracPart = BigInt(
+          Math.round((Math.abs(num) - Math.floor(Math.abs(num))) * 1e18)
+        );
+        const wei = wholePart * (10n ** 18n) + fracPart;
+        return num < 0 ? (-wei).toString() : wei.toString();
+      };
+
+      return {
+        yes: toWei(netPosition.yes),
+        no: toWei(netPosition.no),
+        net: toWei(netPosition.net),
+        isHedged: netPosition.isHedged,
+        numTradesYes: netPosition.numTradesYes,
+        numTradesNo: netPosition.numTradesNo,
+      };
     } catch (error) {
       fastify.log.error({ error }, "Error fetching net position");
       return reply.code(500).send({
