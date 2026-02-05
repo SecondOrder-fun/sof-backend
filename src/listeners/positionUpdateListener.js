@@ -59,7 +59,9 @@ async function scanHistoricalPositionUpdateEvents(
       const supplyForThreshold =
         maxSupply && maxSupply > 0 ? maxSupply : undefined;
 
-      // Process each log to find players who crossed threshold but may not have markets
+      // Process each log: record transactions AND check for missing markets
+      let txRecorded = 0;
+      let txSkipped = 0;
       for (const log of logs) {
         const { seasonId, player, oldTickets, newTickets, totalTickets } =
           log.args;
@@ -72,6 +74,41 @@ async function scanHistoricalPositionUpdateEvents(
           typeof newTickets === "bigint" ? Number(newTickets) : newTickets;
         const totalTicketsNum =
           typeof totalTickets === "bigint" ? Number(totalTickets) : totalTickets;
+
+        // Record transaction in database (idempotent via tx_hash)
+        try {
+          const ticketDelta = newTicketsNum - oldTicketsNum;
+          const transactionType = ticketDelta > 0 ? "BUY" : "SELL";
+
+          const block = await publicClient.getBlock({
+            blockNumber: log.blockNumber,
+          });
+
+          const result = await raffleTransactionService.recordTransaction({
+            seasonId: seasonIdNum,
+            userAddress: player,
+            transactionType,
+            ticketAmount: Math.abs(ticketDelta),
+            sofAmount: 0, // Cannot extract ERC20 amount from event alone
+            txHash: log.transactionHash,
+            blockNumber: Number(log.blockNumber),
+            blockTimestamp: new Date(
+              Number(block.timestamp) * 1000,
+            ).toISOString(),
+            ticketsBefore: oldTicketsNum,
+            ticketsAfter: newTicketsNum,
+          });
+
+          if (result.alreadyRecorded) {
+            txSkipped++;
+          } else {
+            txRecorded++;
+          }
+        } catch (txError) {
+          logger.warn(
+            `   ⚠️  Failed to record historical tx ${log.transactionHash}: ${txError.message}`,
+          );
+        }
 
         const denominator = supplyForThreshold || totalTicketsNum;
         const oldShareBps =
@@ -166,6 +203,10 @@ async function scanHistoricalPositionUpdateEvents(
           }
         }
       }
+
+      logger.info(
+        `   💾 Historical transactions: ${txRecorded} recorded, ${txSkipped} already existed`,
+      );
     } else {
       logger.info("   No historical PositionUpdate events found");
     }
