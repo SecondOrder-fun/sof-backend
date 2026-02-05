@@ -634,7 +634,7 @@ export default async function adminRoutes(fastify) {
       // Get all markets with contract addresses
       const { data: markets, error } = await db.client
         .from("infofi_markets")
-        .select("id, season_id, raffle_id, contract_address, created_at, current_probability_bps")
+        .select("id, season_id, contract_address, created_at, current_probability_bps")
         .not("contract_address", "is", null)
         .order("created_at", { ascending: true });
 
@@ -651,7 +651,7 @@ export default async function adminRoutes(fastify) {
       const results = [];
 
       for (const market of markets) {
-        const seasonId = market.season_id ?? market.raffle_id ?? 0;
+        const seasonId = market.season_id ?? 0;
         const marketId = market.id;
 
         try {
