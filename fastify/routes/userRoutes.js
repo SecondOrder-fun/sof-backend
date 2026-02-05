@@ -77,12 +77,11 @@ export async function userRoutes(fastify, options) {
           amount,
           price,
           created_at,
-          infofi_markets!inner (
+          infofi_markets (
             id,
             season_id,
             player_address,
             market_type,
-            initial_probability_bps,
             current_probability_bps
           )
         `
@@ -146,9 +145,8 @@ export async function userRoutes(fastify, options) {
           market: market
             ? {
                 id: market.id,
-                seasonId: market.season_id, // Use season_id from actual schema
+                seasonId: market.season_id,
                 marketType: market.market_type,
-                initialProbabilityBps: market.initial_probability_bps,
                 currentProbabilityBps: market.current_probability_bps,
                 playerAddress: market.player_address,
               }
