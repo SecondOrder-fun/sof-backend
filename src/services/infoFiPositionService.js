@@ -147,14 +147,40 @@ class InfoFiPositionService {
 
       const latestBlock = await publicClient.getBlockNumber();
 
-      // Skip if already synced
+      // Skip event scan if already synced, but still refresh on-chain probability
       if (startBlock >= latestBlock) {
+        let currentProbabilityBps = null;
+        try {
+          const [yesPrice] = await publicClient.readContract({
+            address: fpmmAddress,
+            abi: simpleFpmmAbi,
+            functionName: "getPrices",
+          });
+          currentProbabilityBps = Number(yesPrice);
+
+          // Update DB probability even if no new events
+          await db.client
+            .from("infofi_markets")
+            .update({
+              current_probability_bps: currentProbabilityBps,
+              current_probability: currentProbabilityBps,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", marketId);
+        } catch (priceError) {
+          console.error(
+            `Failed to refresh probability for ${fpmmAddress}:`,
+            priceError.message
+          );
+        }
+
         return {
           success: true,
           recorded: 0,
           skipped: 0,
           totalEvents: 0,
           message: "Already up to date",
+          currentProbabilityBps,
         };
       }
 
