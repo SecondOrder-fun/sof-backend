@@ -214,13 +214,36 @@ class InfoFiPositionService {
         }
       }
 
-      // Update last synced block
+      // Update last synced block AND current probability from on-chain
+      let currentProbabilityBps = null;
+      try {
+        const [yesPrice] = await publicClient.readContract({
+          address: fpmmAddress,
+          abi: simpleFpmmAbi,
+          functionName: "getPrices",
+        });
+        currentProbabilityBps = Number(yesPrice);
+      } catch (priceError) {
+        console.error(
+          `Failed to read FPMM prices for ${fpmmAddress}:`,
+          priceError.message
+        );
+      }
+
+      const updateData = {
+        last_synced_block: latestBlock.toString(),
+        last_synced_at: new Date().toISOString(),
+      };
+
+      if (currentProbabilityBps !== null) {
+        updateData.current_probability_bps = currentProbabilityBps;
+        updateData.current_probability = currentProbabilityBps;
+        updateData.updated_at = new Date().toISOString();
+      }
+
       await db.client
         .from("infofi_markets")
-        .update({
-          last_synced_block: latestBlock.toString(),
-          last_synced_at: new Date().toISOString(),
-        })
+        .update(updateData)
         .eq("id", marketId);
 
       return {
@@ -231,6 +254,7 @@ class InfoFiPositionService {
         totalEvents: logs.length,
         fromBlock: startBlock.toString(),
         toBlock: latestBlock.toString(),
+        currentProbabilityBps,
       };
     } catch (error) {
       console.error("Error syncing market positions:", error);

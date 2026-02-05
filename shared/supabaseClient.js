@@ -988,6 +988,33 @@ export class DatabaseService {
   }
 
   /**
+   * Update market probability by FPMM contract address
+   * Used by TradeListener after reading on-chain prices
+   * @param {string} fpmmAddress - FPMM contract address
+   * @param {number} newProbabilityBps - New probability in basis points (0-10000)
+   * @returns {Promise<Object|null>} Updated market or null
+   */
+  async updateMarketProbabilityByFpmm(fpmmAddress, newProbabilityBps) {
+    const { data, error } = await this.client
+      .from("infofi_markets")
+      .update({
+        current_probability_bps: newProbabilityBps,
+        current_probability: newProbabilityBps,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("contract_address", fpmmAddress.toLowerCase())
+      .eq("is_active", true)
+      .select()
+      .single();
+
+    if (error) {
+      // Don't throw - market might not exist or race condition
+      return null;
+    }
+    return data;
+  }
+
+  /**
    * Get all active FPMM addresses from markets
    * @returns {Promise<string[]>} Array of unique FPMM contract addresses
    */

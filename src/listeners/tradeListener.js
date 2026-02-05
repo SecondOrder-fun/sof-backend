@@ -15,6 +15,7 @@ import { oracleCallService } from "../services/oracleCallService.js";
 import { infoFiPositionService } from "../services/infoFiPositionService.js";
 import { startContractEventPolling } from "../lib/contractEventPolling.js";
 import { createBlockCursor } from "../lib/blockCursor.js";
+import { db } from "../../shared/supabaseClient.js";
 
 /**
  * Starts listening for Trade events from SimpleFPMM contracts
@@ -120,6 +121,27 @@ export async function startTradeListener(fpmmAddresses, fpmmAbi, logger) {
               } else {
                 logger.warn(
                   `[TRADE_LISTENER] ⚠️  Oracle update failed: ${result.error}`,
+                );
+              }
+
+              // Update market probability in database
+              try {
+                const dbUpdate = await db.updateMarketProbabilityByFpmm(
+                  fpmmAddress,
+                  sentiment,
+                );
+                if (dbUpdate) {
+                  logger.info(
+                    `[TRADE_LISTENER] ✓ DB probability updated: ${sentiment} bps (market ${dbUpdate.id})`,
+                  );
+                } else {
+                  logger.warn(
+                    `[TRADE_LISTENER] ⚠️  DB probability update returned null for ${fpmmAddress}`,
+                  );
+                }
+              } catch (dbError) {
+                logger.error(
+                  `[TRADE_LISTENER] ❌ Failed to update DB probability: ${dbError.message}`,
                 );
               }
 
