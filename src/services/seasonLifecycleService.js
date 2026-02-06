@@ -10,7 +10,7 @@
  */
 
 import { publicClient, getWalletClient } from "../lib/viemClient.js";
-import { RaffleAbi } from "../abis/RaffleAbi.js";
+import RaffleAbi from "../abis/RaffleAbi.js";
 import { adminAlertService } from "./adminAlertService.js";
 
 // SeasonStatus enum from contract
