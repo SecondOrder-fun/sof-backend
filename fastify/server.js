@@ -215,6 +215,15 @@ try {
   app.log.error({ err }, "Failed to mount /api/access (route-config)");
 }
 
+try {
+  await app.register((await import("./routes/seasonRoutes.js")).default, {
+    prefix: "/api/seasons",
+  });
+  app.log.info("Mounted /api/seasons");
+} catch (err) {
+  app.log.error({ err }, "Failed to mount /api/seasons");
+}
+
 // Debug: print all mounted routes
 // app.ready(() => {
 //   try {
