@@ -10,6 +10,7 @@ import { startSeasonLifecycleService, getSeasonLifecycleService } from "../src/s
 import { startPositionUpdateListener } from "../src/listeners/positionUpdateListener.js";
 import { startMarketCreatedListener } from "../src/listeners/marketCreatedListener.js";
 import { startTradeListener } from "../src/listeners/tradeListener.js";
+import { startSponsorHatListener } from "../src/listeners/sponsorHatListener.js";
 import { infoFiPositionService } from "../src/services/infoFiPositionService.js";
 import { historicalOddsService } from "../shared/historicalOddsService.js";
 import raffleAbi from "../src/abis/RaffleAbi.js";
@@ -448,6 +449,16 @@ async function startListeners() {
           `❌ Failed to start SeasonLifecycleService: ${error.message}`
         );
       }
+    }
+
+    // Start Sponsor Hat auto-minter (watches StakingEligibility and mints hats)
+    try {
+      await startSponsorHatListener();
+      app.log.info("✅ SponsorHatListener started");
+    } catch (error) {
+      app.log.error(
+        `❌ Failed to start SponsorHatListener: ${error.message}`
+      );
     }
   } catch (error) {
     app.log.error("Failed to start listeners:", error);
