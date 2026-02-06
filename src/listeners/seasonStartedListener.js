@@ -51,6 +51,10 @@ async function processSeasonStartedLog(
     // Convert seasonId from BigInt to number for database storage
     const seasonIdNum =
       typeof seasonId === "bigint" ? Number(seasonId) : seasonId;
+    const createdBlock =
+      typeof log.blockNumber === "bigint"
+        ? Number(log.blockNumber)
+        : log.blockNumber;
 
     await db.createSeasonContracts({
       season_id: seasonIdNum,
@@ -58,6 +62,7 @@ async function processSeasonStartedLog(
       raffle_token_address: raffleToken,
       raffle_address: raffleAddress,
       is_active: true,
+      created_block: createdBlock,
     });
 
     // 3. Log success

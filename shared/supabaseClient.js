@@ -696,6 +696,7 @@ export class DatabaseService {
           raffle_token_address: data.raffle_token_address,
           raffle_address: data.raffle_address,
           is_active: data.is_active !== undefined ? data.is_active : true,
+          created_block: data.created_block || null,
         },
         {
           onConflict: "season_id",
