@@ -2166,3 +2166,5 @@ export const RaffleAbi = [
     "inputs": []
   }
 ];
+
+export default RaffleAbi;
