@@ -1,4 +1,5 @@
-export default [
+// Auto-generated from Raffle.sol - Fri Feb  6 15:51:59 JST 2026
+export const RaffleAbi = [
   {
     "type": "constructor",
     "inputs": [
@@ -2164,4 +2165,4 @@ export default [
     "name": "ZeroAddress",
     "inputs": []
   }
-]
+];
