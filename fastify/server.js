@@ -6,6 +6,7 @@ import process from "node:process";
 import { hasSupabase, db } from "../shared/supabaseClient.js";
 import { startSeasonStartedListener } from "../src/listeners/seasonStartedListener.js";
 import { startSeasonCompletedListener } from "../src/listeners/seasonCompletedListener.js";
+import { startSeasonLifecycleService, getSeasonLifecycleService } from "../src/services/seasonLifecycleService.js";
 import { startPositionUpdateListener } from "../src/listeners/positionUpdateListener.js";
 import { startMarketCreatedListener } from "../src/listeners/marketCreatedListener.js";
 import { startTradeListener } from "../src/listeners/tradeListener.js";
@@ -428,6 +429,26 @@ async function startListeners() {
         app.log.error(`❌ Failed to start Trade listeners: ${error.message}`);
       }
     }
+
+    // Start Season Lifecycle Service (auto start/end seasons on schedule)
+    if (raffleAddress) {
+      try {
+        const lifecycleIntervalMs = process.env.SEASON_LIFECYCLE_INTERVAL_MS
+          ? parseInt(process.env.SEASON_LIFECYCLE_INTERVAL_MS)
+          : 5 * 60 * 1000; // Default 5 minutes
+
+        await startSeasonLifecycleService(
+          raffleAddress,
+          app.log,
+          lifecycleIntervalMs
+        );
+        app.log.info("✅ SeasonLifecycleService started");
+      } catch (error) {
+        app.log.error(
+          `❌ Failed to start SeasonLifecycleService: ${error.message}`
+        );
+      }
+    }
   } catch (error) {
     app.log.error("Failed to start listeners:", error);
     // Don't crash server, but log the error
@@ -589,6 +610,14 @@ process.on("SIGINT", async () => {
     for (const [fpmmAddress, unwatch] of tradeListeners.entries()) {
       unwatch();
       app.log.info(`🛑 Stopped Trade listener for FPMM ${fpmmAddress}`);
+    }
+
+    // Stop Season Lifecycle Service
+    try {
+      const lifecycleService = getSeasonLifecycleService(app.log);
+      lifecycleService.stop();
+    } catch {
+      // Service may not have been started
     }
 
     await app.close();
