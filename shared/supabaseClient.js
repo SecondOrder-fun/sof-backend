@@ -302,18 +302,6 @@ export class DatabaseService {
   }
 
   /**
-   * Clear all market pricing cache entries
-   */
-  async clearAllMarketPricingCache() {
-    const { error } = await this.client
-      .from("market_pricing_cache")
-      .delete()
-      .neq("market_id", 0); // Delete all rows
-
-    if (error) throw new Error(error.message);
-  }
-
-  /**
    * Log a failed InfoFi market creation attempt
    * @param {Object} params
    * @param {number} params.seasonId - Season identifier
@@ -389,41 +377,6 @@ export class DatabaseService {
     }
 
     return data || [];
-  }
-
-  async getMarketOdds(marketId) {
-    // Align odds with pricing cache (bps fields)
-    const { data, error } = await this.client
-      .from("market_pricing_cache")
-      .select(
-        "raffle_probability, market_sentiment, hybrid_price, last_updated",
-      )
-      .eq("market_id", marketId)
-      .single();
-    if (error) throw new Error(error.message);
-    return data;
-  }
-
-  async upsertMarketPricingCache(cache) {
-    // cache: { market_id, raffle_probability, market_sentiment, hybrid_price,
-    //          raffle_weight, market_weight, last_updated }
-    const { data, error } = await this.client
-      .from("market_pricing_cache")
-      .upsert(cache)
-      .select()
-      .single();
-    if (error) throw new Error(error.message);
-    return data;
-  }
-
-  async getMarketPricingCache(marketId) {
-    const { data, error } = await this.client
-      .from("market_pricing_cache")
-      .select("*")
-      .eq("market_id", marketId)
-      .single();
-    if (error) throw new Error(error.message);
-    return data;
   }
 
   // Positions (user bets)

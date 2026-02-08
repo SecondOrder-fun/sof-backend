@@ -36,12 +36,8 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const TABLES_TO_CLEAR = [
   'infofi_positions',
   'infofi_winnings',
-  'market_pricing_cache',
-  'arbitrage_opportunities',
   'infofi_markets',
   'players',
-  'raffles',
-  'event_processing_state',
 ];
 
 async function clearRedisCache() {
@@ -59,13 +55,10 @@ async function clearRedisCache() {
 
 async function clearTable(tableName) {
   try {
-    // Special handling for tables with different primary keys
-    const pkColumn = tableName === 'market_pricing_cache' ? 'market_id' : 'id';
-    
     const { error, count } = await supabase
       .from(tableName)
       .delete()
-      .gte(pkColumn, 0); // Delete all rows (gte 0 matches everything)
+      .gte('id', 0); // Delete all rows (gte 0 matches everything)
 
     if (error) {
       // If table doesn't exist or not found in cache, that's okay
@@ -95,13 +88,6 @@ async function resetSequences() {
       console.log('✅ Reset infofi_markets sequence');
     }
 
-    // Reset market_pricing_cache sequence
-    const { error: error2 } = await supabase.rpc('reset_market_pricing_cache_sequence');
-    if (error2 && error2.code !== '42883') {
-      console.warn('⚠️  Could not reset market_pricing_cache sequence:', error2.message);
-    } else if (!error2) {
-      console.log('✅ Reset market_pricing_cache sequence');
-    }
   } catch (error) {
     console.warn('⚠️  Sequence reset failed (non-fatal):', error.message);
   }
