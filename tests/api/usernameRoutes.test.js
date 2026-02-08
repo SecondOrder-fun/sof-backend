@@ -11,7 +11,7 @@ const mockMget = vi.fn();
 const mockKeys = vi.fn();
 const mockExec = vi.fn();
 
-vi.mock("../../backend/shared/redisClient.js", () => ({
+vi.mock("../../shared/redisClient.js", () => ({
   redisClient: {
     getClient: () => ({
       get: mockGet,

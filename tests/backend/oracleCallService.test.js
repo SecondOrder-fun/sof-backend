@@ -6,13 +6,20 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const viemMocks = vi.hoisted(() => ({
-  mockGetWalletClient: vi.fn(),
-  mockPublicClient: {
-    readContract: vi.fn(),
-    waitForTransactionReceipt: vi.fn(),
-  },
-}));
+const viemMocks = vi.hoisted(() => {
+  // Must set env before oracleCallService.js singleton instantiates
+  process.env.DEFAULT_NETWORK = "LOCAL";
+  process.env.INFOFI_ORACLE_ADDRESS_LOCAL =
+    "0x1234567890123456789012345678901234567890";
+
+  return {
+    mockGetWalletClient: vi.fn(),
+    mockPublicClient: {
+      readContract: vi.fn(),
+      waitForTransactionReceipt: vi.fn(),
+    },
+  };
+});
 
 vi.mock("../../src/lib/viemClient.js", () => ({
   getWalletClient: (...args) => viemMocks.mockGetWalletClient(...args),
