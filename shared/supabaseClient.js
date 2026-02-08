@@ -647,34 +647,6 @@ export class DatabaseService {
     return data;
   }
 
-  // Event processing state operations
-  async getLastProcessedBlock(eventType) {
-    const { data, error } = await this.client
-      .from("event_processing_state")
-      .select("last_block")
-      .eq("event_type", eventType)
-      .single();
-
-    if (error && error.code !== "PGRST116") {
-      // Not found is OK
-      this.getLogger().debug("Error getting last processed block:", error);
-    }
-
-    return data?.last_block || 0;
-  }
-
-  async setLastProcessedBlock(eventType, blockNumber) {
-    const { error } = await this.client.from("event_processing_state").upsert({
-      event_type: eventType,
-      last_block: blockNumber,
-      updated_at: new Date().toISOString(),
-    });
-
-    if (error) {
-      this.getLogger().debug("Error setting last processed block:", error);
-    }
-  }
-
   // Season contracts operations
   /**
    * Create or update season contract addresses
