@@ -11,6 +11,30 @@ import {
 import Fastify from "fastify";
 import infoFiRoutes from "../../fastify/routes/infoFiRoutes.js";
 
+vi.mock("../../src/lib/viemClient.js", () => ({
+  publicClient: { readContract: vi.fn() },
+  getPublicClient: vi.fn(),
+}));
+
+vi.mock("../../src/config/chain.js", () => ({
+  getChainByKey: vi.fn(),
+}));
+
+vi.mock("../../shared/pricingService.js", () => ({
+  pricingService: {
+    getCachedPricing: vi.fn(),
+    subscribeToMarket: vi.fn(() => () => {}),
+  },
+}));
+
+vi.mock("../../shared/marketMakerService.js", () => ({
+  marketMakerService: {
+    quote: vi.fn(),
+    buy: vi.fn(),
+    sell: vi.fn(),
+  },
+}));
+
 vi.mock("../../shared/supabaseClient.js", () => ({
   supabase: {
     from: vi.fn(),
