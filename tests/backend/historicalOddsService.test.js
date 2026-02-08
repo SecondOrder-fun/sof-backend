@@ -1,53 +1,73 @@
 // tests/backend/historicalOddsService.test.js
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { historicalOddsService } from "../../shared/historicalOddsService.js";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 
 /**
- * Unit tests for Historical Odds Service
- * Tests Redis-based time-series storage for market odds data
+ * Unit tests for HistoricalOddsService (Supabase-backed)
+ * Tests odds recording, retrieval, cleanup, and downsampling.
  */
 
-// Mock Redis client
-const mockRedis = {
-  zadd: vi.fn(),
-  zcard: vi.fn(),
-  zremrangebyrank: vi.fn(),
-  expire: vi.fn(),
-  zrangebyscore: vi.fn(),
-  zremrangebyscore: vi.fn(),
-  del: vi.fn(),
-  ttl: vi.fn(),
-  zrange: vi.fn(),
-};
+// Configurable mock results (updated per test)
+let mockQueryResult = { data: [], error: null, count: null };
 
-// Mock redisClient module
-vi.mock("../../shared/redisClient.js", () => ({
-  redisClient: {
-    getClient: () => mockRedis,
+// Build a chainable query-builder mock that resolves to mockQueryResult
+function chainable() {
+  const chain = {};
+  const methods = [
+    "insert",
+    "select",
+    "delete",
+    "eq",
+    "gte",
+    "lt",
+    "not",
+    "neq",
+    "order",
+    "limit",
+  ];
+
+  for (const m of methods) {
+    chain[m] = vi.fn(() => chain);
+  }
+
+  // single() terminates the chain and returns the result
+  chain.single = vi.fn(() => ({
+    data: mockQueryResult.data?.[0] ?? null,
+    error: mockQueryResult.error,
+  }));
+
+  // Make chain thenable so `await query` resolves to mockQueryResult
+  chain.then = (resolve) => resolve(mockQueryResult);
+
+  return chain;
+}
+
+const mockFrom = vi.fn(() => chainable());
+
+vi.mock("../../shared/supabaseClient.js", () => ({
+  hasSupabase: true,
+  supabase: {
+    from: (...args) => {
+      mockFrom(...args);
+      return chainable();
+    },
   },
 }));
 
-describe("HistoricalOddsService", () => {
+import {
+  historicalOddsService,
+  historicalOddsRanges,
+} from "../../shared/historicalOddsService.js";
+
+describe("HistoricalOddsService (Supabase)", () => {
   beforeEach(() => {
-    // Reset all mocks before each test
     vi.clearAllMocks();
-
-    // Reset service state
-    historicalOddsService.redis = null;
-  });
-
-  afterEach(() => {
-    vi.clearAllMocks();
+    mockQueryResult = { data: [], error: null, count: null };
   });
 
   describe("recordOddsUpdate", () => {
-    it("should record a new odds data point", async () => {
-      mockRedis.zadd.mockResolvedValue(1);
-      mockRedis.zcard.mockResolvedValue(1);
-      mockRedis.expire.mockResolvedValue(1);
-
+    it("should call supabase insert with correct table and data", async () => {
       const oddsData = {
-        timestamp: Date.now(),
+        timestamp: 1729260000000,
         yes_bps: 4500,
         no_bps: 5500,
         hybrid_bps: 4500,
@@ -55,154 +75,88 @@ describe("HistoricalOddsService", () => {
         sentiment_bps: 5000,
       };
 
-      await historicalOddsService.recordOddsUpdate(1, 0, oddsData);
+      await historicalOddsService.recordOddsUpdate(1, 42, oddsData);
 
-      // Verify zadd was called with correct key and data
-      expect(mockRedis.zadd).toHaveBeenCalledTimes(1);
-      const [key, timestamp, member] = mockRedis.zadd.mock.calls[0];
-      expect(key).toBe("odds:history:1:0");
-      expect(timestamp).toBe(oddsData.timestamp);
-
-      const parsedMember = JSON.parse(member);
-      expect(parsedMember.yes_bps).toBe(4500);
-      expect(parsedMember.no_bps).toBe(5500);
-
-      // Verify expiration was set
-      expect(mockRedis.expire).toHaveBeenCalledWith(
-        "odds:history:1:0",
-        90 * 24 * 60 * 60,
-      );
+      expect(mockFrom).toHaveBeenCalledWith("infofi_odds_history");
     });
 
-    it("should trim old entries when max points exceeded", async () => {
-      mockRedis.zadd.mockResolvedValue(1);
-      mockRedis.zcard.mockResolvedValue(100001); // Over max
-      mockRedis.zremrangebyrank.mockResolvedValue(1);
-      mockRedis.expire.mockResolvedValue(1);
-
-      const oddsData = {
-        timestamp: Date.now(),
-        yes_bps: 5000,
-        no_bps: 5000,
-        hybrid_bps: 5000,
-        raffle_bps: 5000,
-        sentiment_bps: 5000,
-      };
-
-      await historicalOddsService.recordOddsUpdate(1, 0, oddsData);
-
-      // Verify trimming was called
-      expect(mockRedis.zremrangebyrank).toHaveBeenCalledWith(
-        "odds:history:1:0",
-        0,
-        0,
-      );
+    it("should skip insert if no timestamp provided", async () => {
+      await historicalOddsService.recordOddsUpdate(1, 0, {});
+      expect(mockFrom).not.toHaveBeenCalled();
     });
 
-    it("should handle Redis errors gracefully", async () => {
-      mockRedis.zadd.mockRejectedValue(new Error("Redis connection failed"));
+    it("should skip insert if oddsData is null", async () => {
+      await historicalOddsService.recordOddsUpdate(1, 0, null);
+      expect(mockFrom).not.toHaveBeenCalled();
+    });
 
-      const oddsData = {
-        timestamp: Date.now(),
-        yes_bps: 5000,
-        no_bps: 5000,
-        hybrid_bps: 5000,
-        raffle_bps: 5000,
-        sentiment_bps: 5000,
-      };
+    it("should not throw on errors", async () => {
+      mockQueryResult = { data: null, error: { message: "insert failed" } };
 
-      // Should not throw
       await expect(
-        historicalOddsService.recordOddsUpdate(1, 0, oddsData),
-      ).resolves.toBeUndefined();
+        historicalOddsService.recordOddsUpdate(1, 0, {
+          timestamp: Date.now(),
+          yes_bps: 5000,
+          no_bps: 5000,
+        }),
+      ).resolves.not.toThrow();
     });
   });
 
   describe("getHistoricalOdds", () => {
-    it("should retrieve historical odds for a time range", async () => {
-      const mockDataPoints = [
-        JSON.stringify({
-          timestamp: 1000,
-          yes_bps: 4500,
-          no_bps: 5500,
-          hybrid_bps: 4500,
-          raffle_bps: 4200,
-          sentiment_bps: 5000,
-        }),
-        "1000",
-        JSON.stringify({
-          timestamp: 2000,
-          yes_bps: 4600,
-          no_bps: 5400,
-          hybrid_bps: 4600,
-          raffle_bps: 4300,
-          sentiment_bps: 5100,
-        }),
-        "2000",
-      ];
-
-      mockRedis.zrangebyscore.mockResolvedValue(mockDataPoints);
-
-      const result = await historicalOddsService.getHistoricalOdds(1, 0, "1D");
-
-      expect(result.dataPoints).toHaveLength(2);
-      expect(result.dataPoints[0].yes_bps).toBe(4500);
-      expect(result.dataPoints[1].yes_bps).toBe(4600);
-      expect(result.count).toBe(2);
-      expect(result.downsampled).toBe(false);
+    it("should reject invalid time range", async () => {
+      const result = await historicalOddsService.getHistoricalOdds(
+        1,
+        0,
+        "INVALID",
+      );
+      expect(result.error).toBe("Invalid time range: INVALID");
+      expect(result.dataPoints).toEqual([]);
     });
 
-    it("should downsample data when exceeding max points", async () => {
-      // Create 600 mock data points (exceeds 500 max)
-      const mockDataPoints = [];
-      for (let i = 0; i < 600; i++) {
-        mockDataPoints.push(
-          JSON.stringify({
-            timestamp: i * 1000,
-            yes_bps: 5000,
-            no_bps: 5000,
-            hybrid_bps: 5000,
-            raffle_bps: 5000,
-            sentiment_bps: 5000,
-          }),
-        );
-        mockDataPoints.push(String(i * 1000));
-      }
+    it("should query correct table", async () => {
+      mockQueryResult = { data: [], error: null };
 
-      mockRedis.zrangebyscore.mockResolvedValue(mockDataPoints);
+      await historicalOddsService.getHistoricalOdds(1, 42, "ALL");
+
+      expect(mockFrom).toHaveBeenCalledWith("infofi_odds_history");
+    });
+
+    it("should transform rows to match API contract", async () => {
+      mockQueryResult = {
+        data: [
+          {
+            recorded_at: "2025-10-18T12:00:00.000Z",
+            yes_bps: 4500,
+            no_bps: 5500,
+            hybrid_bps: 4500,
+            raffle_bps: 4200,
+            sentiment_bps: 5000,
+          },
+        ],
+        error: null,
+      };
 
       const result = await historicalOddsService.getHistoricalOdds(1, 0, "ALL");
 
-      expect(result.count).toBeLessThanOrEqual(500);
-      expect(result.downsampled).toBe(true);
-    });
-
-    it("should handle malformed data points", async () => {
-      const mockDataPoints = [
-        "invalid json",
-        "1000",
-        JSON.stringify({
-          timestamp: 2000,
-          yes_bps: 4600,
-          no_bps: 5400,
-          hybrid_bps: 4600,
-          raffle_bps: 4300,
-          sentiment_bps: 5100,
-        }),
-        "2000",
-      ];
-
-      mockRedis.zrangebyscore.mockResolvedValue(mockDataPoints);
-
-      const result = await historicalOddsService.getHistoricalOdds(1, 0, "1D");
-
-      // Should skip malformed data and return valid point
       expect(result.dataPoints).toHaveLength(1);
-      expect(result.dataPoints[0].yes_bps).toBe(4600);
+      expect(result.dataPoints[0]).toEqual({
+        timestamp: new Date("2025-10-18T12:00:00.000Z").getTime(),
+        yes_bps: 4500,
+        no_bps: 5500,
+        hybrid_bps: 4500,
+        raffle_bps: 4200,
+        sentiment_bps: 5000,
+      });
+      expect(result.count).toBe(1);
+      expect(result.downsampled).toBe(false);
     });
 
-    it("should return empty array on Redis error", async () => {
-      mockRedis.zrangebyscore.mockRejectedValue(new Error("Redis error"));
+    it("should return empty array on Supabase error", async () => {
+      mockQueryResult = {
+        data: null,
+        error: { message: "query failed" },
+      };
 
       const result = await historicalOddsService.getHistoricalOdds(1, 0, "1D");
 
@@ -210,26 +164,56 @@ describe("HistoricalOddsService", () => {
       expect(result.count).toBe(0);
       expect(result.error).toBeDefined();
     });
+
+    it("should downsample when exceeding max points", async () => {
+      mockQueryResult = {
+        data: Array.from({ length: 600 }, (_, i) => ({
+          recorded_at: new Date(Date.now() - (600 - i) * 60000).toISOString(),
+          yes_bps: 5000,
+          no_bps: 5000,
+          hybrid_bps: 5000,
+          raffle_bps: 5000,
+          sentiment_bps: 5000,
+        })),
+        error: null,
+      };
+
+      const result = await historicalOddsService.getHistoricalOdds(1, 0, "ALL");
+
+      expect(result.count).toBeLessThanOrEqual(500);
+      expect(result.downsampled).toBe(true);
+    });
+
+    it("should support all valid time ranges", async () => {
+      mockQueryResult = { data: [], error: null };
+
+      for (const range of ["1H", "6H", "1D", "1W", "1M", "ALL"]) {
+        const result = await historicalOddsService.getHistoricalOdds(
+          1,
+          0,
+          range,
+        );
+        expect(result.dataPoints).toEqual([]);
+        expect(result.count).toBe(0);
+      }
+    });
   });
 
   describe("cleanupOldData", () => {
-    it("should remove entries older than retention period", async () => {
-      mockRedis.zremrangebyscore.mockResolvedValue(10);
+    it("should delete old records and return count", async () => {
+      mockQueryResult = {
+        data: [{ id: 1 }, { id: 2 }, { id: 3 }],
+        error: null,
+      };
 
-      const removed = await historicalOddsService.cleanupOldData(1, 0);
+      const removed = await historicalOddsService.cleanupOldData(1, 42);
 
-      expect(removed).toBe(10);
-      expect(mockRedis.zremrangebyscore).toHaveBeenCalledTimes(1);
-
-      const [key, minScore, maxScore] =
-        mockRedis.zremrangebyscore.mock.calls[0];
-      expect(key).toBe("odds:history:1:0");
-      expect(minScore).toBe(0);
-      expect(maxScore).toBeLessThan(Date.now());
+      expect(mockFrom).toHaveBeenCalledWith("infofi_odds_history");
+      expect(removed).toBe(3);
     });
 
     it("should handle cleanup errors gracefully", async () => {
-      mockRedis.zremrangebyscore.mockRejectedValue(new Error("Redis error"));
+      mockQueryResult = { data: null, error: { message: "delete failed" } };
 
       const removed = await historicalOddsService.cleanupOldData(1, 0);
 
@@ -238,17 +222,17 @@ describe("HistoricalOddsService", () => {
   });
 
   describe("clearMarketHistory", () => {
-    it("should delete all data for a market", async () => {
-      mockRedis.del.mockResolvedValue(1);
+    it("should delete all records for a market", async () => {
+      mockQueryResult = { data: null, error: null };
 
-      const result = await historicalOddsService.clearMarketHistory(1, 0);
+      const result = await historicalOddsService.clearMarketHistory(1, 42);
 
+      expect(mockFrom).toHaveBeenCalledWith("infofi_odds_history");
       expect(result).toBe(true);
-      expect(mockRedis.del).toHaveBeenCalledWith("odds:history:1:0");
     });
 
-    it("should handle deletion errors", async () => {
-      mockRedis.del.mockRejectedValue(new Error("Redis error"));
+    it("should return false on error", async () => {
+      mockQueryResult = { data: null, error: { message: "delete failed" } };
 
       const result = await historicalOddsService.clearMarketHistory(1, 0);
 
@@ -257,27 +241,10 @@ describe("HistoricalOddsService", () => {
   });
 
   describe("getStats", () => {
-    it("should return statistics about stored data", async () => {
-      mockRedis.zcard.mockResolvedValue(100);
-      mockRedis.ttl.mockResolvedValue(7776000); // 90 days in seconds
-      mockRedis.zrange
-        .mockResolvedValueOnce(["data", "1000"]) // oldest
-        .mockResolvedValueOnce(["data", "10000"]); // newest
+    it("should return zero count when no data exists", async () => {
+      mockQueryResult = { data: null, error: null, count: 0 };
 
-      const stats = await historicalOddsService.getStats(1, 0);
-
-      expect(stats.count).toBe(100);
-      expect(stats.ttl).toBe(7776000);
-      expect(stats.oldestTimestamp).toBe(1000);
-      expect(stats.newestTimestamp).toBe(10000);
-      expect(stats.key).toBe("odds:history:1:0");
-    });
-
-    it("should handle empty data set", async () => {
-      mockRedis.zcard.mockResolvedValue(0);
-      mockRedis.ttl.mockResolvedValue(-1);
-
-      const stats = await historicalOddsService.getStats(1, 0);
+      const stats = await historicalOddsService.getStats(1, 42);
 
       expect(stats.count).toBe(0);
       expect(stats.oldestTimestamp).toBeNull();
@@ -285,7 +252,11 @@ describe("HistoricalOddsService", () => {
     });
 
     it("should handle errors gracefully", async () => {
-      mockRedis.zcard.mockRejectedValue(new Error("Redis error"));
+      mockQueryResult = {
+        data: null,
+        error: { message: "query failed" },
+        count: null,
+      };
 
       const stats = await historicalOddsService.getStats(1, 0);
 
@@ -295,7 +266,7 @@ describe("HistoricalOddsService", () => {
   });
 
   describe("_downsampleData", () => {
-    it("should not downsample if under max points", () => {
+    it("should not downsample if under maxPoints", () => {
       const dataPoints = [
         {
           timestamp: 1000,
@@ -316,7 +287,6 @@ describe("HistoricalOddsService", () => {
       ];
 
       const result = historicalOddsService._downsampleData(dataPoints, 500);
-
       expect(result).toEqual(dataPoints);
     });
 
@@ -343,20 +313,41 @@ describe("HistoricalOddsService", () => {
       const result = historicalOddsService._downsampleData(dataPoints, 1);
 
       expect(result).toHaveLength(1);
-      expect(result[0].yes_bps).toBe(5000); // Average of 4000 and 6000
+      expect(result[0].yes_bps).toBe(5000);
       expect(result[0].no_bps).toBe(5000);
+      expect(result[0].timestamp).toBe(1500);
     });
   });
 
-  describe("_getKey", () => {
-    it("should generate correct Redis key", () => {
-      const key = historicalOddsService._getKey(1, 5);
-      expect(key).toBe("odds:history:1:5");
-    });
+  describe("_getRangeStart", () => {
+    it("should return correct offsets for each range", () => {
+      const now = Date.now();
 
-    it("should handle string IDs", () => {
-      const key = historicalOddsService._getKey("1", "5");
-      expect(key).toBe("odds:history:1:5");
+      expect(historicalOddsService._getRangeStart("1H", now)).toBe(
+        now - 3600000,
+      );
+      expect(historicalOddsService._getRangeStart("6H", now)).toBe(
+        now - 21600000,
+      );
+      expect(historicalOddsService._getRangeStart("1D", now)).toBe(
+        now - 86400000,
+      );
+      expect(historicalOddsService._getRangeStart("1W", now)).toBe(
+        now - 604800000,
+      );
+      expect(historicalOddsService._getRangeStart("1M", now)).toBe(
+        now - 2592000000,
+      );
+      expect(historicalOddsService._getRangeStart("ALL", now)).toBe(0);
+    });
+  });
+
+  describe("historicalOddsRanges", () => {
+    it("should export all valid ranges", () => {
+      expect(historicalOddsRanges).toEqual(
+        expect.arrayContaining(["1H", "6H", "1D", "1W", "1M", "ALL"]),
+      );
+      expect(historicalOddsRanges).toHaveLength(6);
     });
   });
 });
