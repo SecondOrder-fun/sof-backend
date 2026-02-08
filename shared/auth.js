@@ -1,5 +1,4 @@
 import jwt from "jsonwebtoken";
-import { db } from "./supabaseClient.js";
 import process from "node:process";
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -61,22 +60,6 @@ export class AuthService {
     return null;
   }
 
-  static async createUserFromWallet(walletAddress) {
-    // Check if user already exists
-    let user = await db.getUserByAddress(walletAddress);
-
-    if (!user) {
-      // Create new user
-      user = await db.createUser({
-        wallet_address: walletAddress,
-        display_name: `User_${walletAddress.substring(0, 6)}`,
-        role: "user",
-        created_at: new Date().toISOString(),
-      });
-    }
-
-    return user;
-  }
 }
 
 // Fastify authentication decorator

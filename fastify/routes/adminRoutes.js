@@ -130,7 +130,7 @@ export default async function adminRoutes(fastify) {
       let failedAttempts = 0;
       try {
         const { count, error: failErr } = await db.client
-          .from("infofi_failed_market_attempts")
+          .from("infofi_failed_markets")
           .select("id", { count: "exact", head: true });
         if (!failErr) failedAttempts = count || 0;
       } catch (_err) {
@@ -173,14 +173,9 @@ export default async function adminRoutes(fastify) {
         let name = `Season ${seasonId}`;
         let status = "active";
 
-        try {
-          const raffle = await db.getRaffleById(seasonId);
-          if (raffle) {
-            if (raffle.name) name = raffle.name;
-            if (raffle.status) status = raffle.status;
-          }
-        } catch (_err) {
-          // If raffle row not found, fall back to defaults
+        // Season name/status derived from season_contracts; no separate raffles table
+        if (sc.is_active === false) {
+          status = "completed";
         }
 
         seasons.push({ id: seasonId, name, status });
