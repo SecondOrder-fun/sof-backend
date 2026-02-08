@@ -1,28 +1,13 @@
-import { redisClient } from "./redisClient.js";
+import { supabase, hasSupabase } from "./supabaseClient.js";
 
 const VALID_RANGES = new Set(["1H", "6H", "1D", "1W", "1M", "ALL"]);
 const MAX_POINTS = 500;
-const MAX_STORED_POINTS = 100000;
-const RETENTION_SECONDS = 90 * 24 * 60 * 60;
+const RETENTION_DAYS = 90;
 
 /**
- * Historical odds storage backed by Redis sorted sets.
+ * Historical odds storage backed by Supabase (infofi_odds_history table).
  */
 class HistoricalOddsService {
-  constructor() {
-    this.redis = null;
-  }
-
-  /**
-   * Initialize Redis client reference.
-   * @returns {void}
-   */
-  init() {
-    if (!this.redis) {
-      this.redis = redisClient.getClient();
-    }
-  }
-
   /**
    * Record a new odds data point for a market.
    * @param {number|string} seasonId - Season identifier.
@@ -31,30 +16,34 @@ class HistoricalOddsService {
    * @param {number} oddsData.timestamp - Timestamp in ms.
    * @param {number} oddsData.yes_bps - YES odds in bps.
    * @param {number} oddsData.no_bps - NO odds in bps.
-   * @param {number} oddsData.hybrid_bps - Hybrid odds in bps.
-   * @param {number} oddsData.raffle_bps - Raffle odds in bps.
-   * @param {number} oddsData.sentiment_bps - Sentiment odds in bps.
+   * @param {number} [oddsData.hybrid_bps] - Hybrid odds in bps.
+   * @param {number} [oddsData.raffle_bps] - Raffle odds in bps.
+   * @param {number} [oddsData.sentiment_bps] - Sentiment odds in bps.
    * @returns {Promise<void>}
    */
   async recordOddsUpdate(seasonId, marketId, oddsData) {
     try {
-      this.init();
-      if (!this.redis || !oddsData?.timestamp) {
+      if (!hasSupabase || !oddsData?.timestamp) {
         return;
       }
 
-      const key = this._getKey(seasonId, marketId);
-      const payload = JSON.stringify(oddsData);
+      const { error } = await supabase.from("infofi_odds_history").insert({
+        market_id: Number(marketId),
+        season_id: Number(seasonId),
+        recorded_at: new Date(oddsData.timestamp).toISOString(),
+        yes_bps: oddsData.yes_bps,
+        no_bps: oddsData.no_bps,
+        hybrid_bps: oddsData.hybrid_bps || 0,
+        raffle_bps: oddsData.raffle_bps || 0,
+        sentiment_bps: oddsData.sentiment_bps || 0,
+      });
 
-      await this.redis.zadd(key, oddsData.timestamp, payload);
-
-      const count = await this.redis.zcard(key);
-      if (count > MAX_STORED_POINTS) {
-        const excess = count - MAX_STORED_POINTS;
-        await this.redis.zremrangebyrank(key, 0, excess - 1);
+      if (error) {
+        console.error(
+          "[historicalOddsService] Failed to record odds:",
+          error.message,
+        );
       }
-
-      await this.redis.expire(key, RETENTION_SECONDS);
     } catch (error) {
       console.error("[historicalOddsService] Failed to record odds", error);
     }
@@ -73,62 +62,39 @@ class HistoricalOddsService {
         throw new Error(`Invalid time range: ${range}`);
       }
 
-      this.init();
-      if (!this.redis) {
+      if (!hasSupabase) {
         return { dataPoints: [], count: 0, downsampled: false };
       }
 
-      const key = this._getKey(seasonId, marketId);
-      const now = Date.now();
-      const minScore = this._getRangeStart(range, now);
+      let query = supabase
+        .from("infofi_odds_history")
+        .select(
+          "recorded_at, yes_bps, no_bps, hybrid_bps, raffle_bps, sentiment_bps",
+        )
+        .eq("market_id", Number(marketId))
+        .order("recorded_at", { ascending: true });
 
-      // For non-ALL ranges, prepend the last data point before the window
-      // so the graph has a "carry-forward" anchor at the left edge
-      let anchorPoint = null;
-      if (range !== "ALL" && minScore > 0) {
-        const anchorRaw = await this.redis.zrevrangebyscore(
-          key,
-          minScore - 1,
-          0,
-          "WITHSCORES",
-          "LIMIT",
-          0,
-          1,
-        );
-        if (anchorRaw.length >= 2) {
-          try {
-            const parsed = JSON.parse(anchorRaw[0]);
-            // Project the anchor to the range start time so the graph
-            // begins at the left edge with the last known value
-            anchorPoint = { ...parsed, timestamp: minScore };
-          } catch (_) {
-            // skip malformed anchor
-          }
-        }
+      // Apply time range filter
+      if (range !== "ALL") {
+        const minDate = new Date(this._getRangeStart(range, Date.now()));
+        query = query.gte("recorded_at", minDate.toISOString());
       }
 
-      const raw = await this.redis.zrangebyscore(
-        key,
-        minScore,
-        now,
-        "WITHSCORES",
-      );
+      const { data, error } = await query;
 
-      const dataPoints = [];
-
-      // Insert anchor as the first point if we have one
-      if (anchorPoint) {
-        dataPoints.push(anchorPoint);
+      if (error) {
+        throw new Error(error.message);
       }
 
-      for (let i = 0; i < raw.length; i += 2) {
-        try {
-          const point = JSON.parse(raw[i]);
-          dataPoints.push(point);
-        } catch (parseError) {
-          console.warn("[historicalOddsService] Skipping invalid odds point");
-        }
-      }
+      // Transform rows to match the existing API contract
+      const dataPoints = (data || []).map((row) => ({
+        timestamp: new Date(row.recorded_at).getTime(),
+        yes_bps: row.yes_bps,
+        no_bps: row.no_bps,
+        hybrid_bps: row.hybrid_bps,
+        raffle_bps: row.raffle_bps,
+        sentiment_bps: row.sentiment_bps,
+      }));
 
       const needsDownsample = dataPoints.length > MAX_POINTS;
       const finalPoints = needsDownsample
@@ -159,14 +125,30 @@ class HistoricalOddsService {
    */
   async cleanupOldData(seasonId, marketId) {
     try {
-      this.init();
-      if (!this.redis) {
+      if (!hasSupabase) {
         return 0;
       }
 
-      const key = this._getKey(seasonId, marketId);
-      const cutoff = Date.now() - RETENTION_SECONDS * 1000;
-      return await this.redis.zremrangebyscore(key, 0, cutoff);
+      const cutoff = new Date(
+        Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000,
+      );
+
+      const { data, error } = await supabase
+        .from("infofi_odds_history")
+        .delete()
+        .eq("market_id", Number(marketId))
+        .lt("recorded_at", cutoff.toISOString())
+        .select("id");
+
+      if (error) {
+        console.error(
+          "[historicalOddsService] Cleanup failed:",
+          error.message,
+        );
+        return 0;
+      }
+
+      return data?.length || 0;
     } catch (error) {
       console.error("[historicalOddsService] Cleanup failed", error);
       return 0;
@@ -181,14 +163,24 @@ class HistoricalOddsService {
    */
   async clearMarketHistory(seasonId, marketId) {
     try {
-      this.init();
-      if (!this.redis) {
+      if (!hasSupabase) {
         return false;
       }
 
-      const key = this._getKey(seasonId, marketId);
-      const result = await this.redis.del(key);
-      return result > 0;
+      const { error } = await supabase
+        .from("infofi_odds_history")
+        .delete()
+        .eq("market_id", Number(marketId));
+
+      if (error) {
+        console.error(
+          "[historicalOddsService] Failed to clear history:",
+          error.message,
+        );
+        return false;
+      }
+
+      return true;
     } catch (error) {
       console.error("[historicalOddsService] Failed to clear history", error);
       return false;
@@ -199,54 +191,61 @@ class HistoricalOddsService {
    * Retrieve stats about stored market odds.
    * @param {number|string} seasonId - Season identifier.
    * @param {number|string} marketId - Market identifier.
-   * @returns {Promise<{count: number, ttl: number, oldestTimestamp: number|null, newestTimestamp: number|null, key: string, error?: string}>}
+   * @returns {Promise<{count: number, oldestTimestamp: number|null, newestTimestamp: number|null, error?: string}>}
    */
   async getStats(seasonId, marketId) {
-    const key = this._getKey(seasonId, marketId);
-
     try {
-      this.init();
-      if (!this.redis) {
-        return {
-          count: 0,
-          ttl: -1,
-          oldestTimestamp: null,
-          newestTimestamp: null,
-          key,
-        };
+      if (!hasSupabase) {
+        return { count: 0, oldestTimestamp: null, newestTimestamp: null };
       }
 
-      const count = await this.redis.zcard(key);
-      const ttl = await this.redis.ttl(key);
+      // Get count
+      const { count, error: countError } = await supabase
+        .from("infofi_odds_history")
+        .select("id", { count: "exact", head: true })
+        .eq("market_id", Number(marketId));
 
-      if (count === 0) {
-        return {
-          count: 0,
-          ttl,
-          oldestTimestamp: null,
-          newestTimestamp: null,
-          key,
-        };
+      if (countError) {
+        throw new Error(countError.message);
       }
 
-      const oldest = await this.redis.zrange(key, 0, 0, "WITHSCORES");
-      const newest = await this.redis.zrange(key, -1, -1, "WITHSCORES");
+      if (!count || count === 0) {
+        return { count: 0, oldestTimestamp: null, newestTimestamp: null };
+      }
+
+      // Get oldest
+      const { data: oldest } = await supabase
+        .from("infofi_odds_history")
+        .select("recorded_at")
+        .eq("market_id", Number(marketId))
+        .order("recorded_at", { ascending: true })
+        .limit(1)
+        .single();
+
+      // Get newest
+      const { data: newest } = await supabase
+        .from("infofi_odds_history")
+        .select("recorded_at")
+        .eq("market_id", Number(marketId))
+        .order("recorded_at", { ascending: false })
+        .limit(1)
+        .single();
 
       return {
         count,
-        ttl,
-        oldestTimestamp: oldest[1] ? Number(oldest[1]) : null,
-        newestTimestamp: newest[1] ? Number(newest[1]) : null,
-        key,
+        oldestTimestamp: oldest
+          ? new Date(oldest.recorded_at).getTime()
+          : null,
+        newestTimestamp: newest
+          ? new Date(newest.recorded_at).getTime()
+          : null,
       };
     } catch (error) {
       console.error("[historicalOddsService] Failed to fetch stats", error);
       return {
         count: 0,
-        ttl: -1,
         oldestTimestamp: null,
         newestTimestamp: null,
-        key,
         error: error.message,
       };
     }
@@ -299,16 +298,6 @@ class HistoricalOddsService {
     }
 
     return downsampled;
-  }
-
-  /**
-   * Build Redis key for a market history set.
-   * @param {number|string} seasonId - Season identifier.
-   * @param {number|string} marketId - Market identifier.
-   * @returns {string}
-   */
-  _getKey(seasonId, marketId) {
-    return `odds:history:${seasonId}:${marketId}`;
   }
 
   /**

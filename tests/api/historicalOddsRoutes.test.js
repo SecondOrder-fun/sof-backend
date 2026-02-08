@@ -161,7 +161,7 @@ describe("Historical Odds API Routes", () => {
       });
 
       historicalOddsService.getHistoricalOdds.mockRejectedValue(
-        new Error("Redis connection failed"),
+        new Error("Database query failed"),
       );
 
       const response = await app.inject({
@@ -172,7 +172,7 @@ describe("Historical Odds API Routes", () => {
       expect(response.statusCode).toBe(500);
       const body = JSON.parse(response.body);
       expect(body.error).toBe("Failed to fetch historical odds");
-      expect(body.message).toBe("Redis connection failed");
+      expect(body.message).toBe("Database query failed");
     });
 
     it("should support all valid time ranges", async () => {
