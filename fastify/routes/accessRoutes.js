@@ -131,17 +131,23 @@ export default async function accessRoutes(fastify) {
   /**
    * POST /set-access-level
    * Update a user's access level (admin only)
-   * Body: { fid: number, accessLevel: number }
+   * Body: { fid?: number, wallet?: string, accessLevel: number }
    */
   fastify.post(
     "/set-access-level",
     { preHandler: requireAdmin },
     async (request, reply) => {
-      const { fid, accessLevel } = request.body;
+      const { fid, wallet, accessLevel } = request.body;
 
-      if (!fid || accessLevel === undefined) {
+      if (!fid && !wallet) {
         return reply.code(400).send({
-          error: "fid and accessLevel are required",
+          error: "Either fid or wallet is required",
+        });
+      }
+
+      if (accessLevel === undefined) {
+        return reply.code(400).send({
+          error: "accessLevel is required",
         });
       }
 
@@ -152,7 +158,10 @@ export default async function accessRoutes(fastify) {
       }
 
       try {
-        const result = await setUserAccessLevel(fid, accessLevel);
+        const result = await setUserAccessLevel(
+          { fid: fid ? Number(fid) : undefined, wallet },
+          accessLevel,
+        );
 
         if (!result.success) {
           return reply.code(400).send({

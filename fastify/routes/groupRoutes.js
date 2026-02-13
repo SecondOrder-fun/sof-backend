@@ -180,22 +180,23 @@ export default async function groupRoutes(fastify) {
   /**
    * POST /groups/assign
    * Add user to a group (admin only)
-   * Body: { fid: number, groupSlug: string, expiresAt?: string, grantedBy?: string }
+   * Body: { fid?: number, wallet?: string, groupSlug: string, expiresAt?: string, grantedBy?: string }
    */
   fastify.post(
     "/groups/assign",
     { preHandler: requireAdmin },
     async (request, reply) => {
-      const { fid, groupSlug, expiresAt, grantedBy } = request.body;
+      const { fid, wallet, groupSlug, expiresAt, grantedBy } = request.body;
 
-      if (!fid || !groupSlug) {
+      if ((!fid && !wallet) || !groupSlug) {
         return reply.code(400).send({
-          error: "fid and groupSlug are required",
+          error: "groupSlug and either fid or wallet are required",
         });
       }
 
       try {
-        const result = await addUserToGroup(fid, groupSlug, {
+        const identifier = { fid: fid ? Number(fid) : undefined, wallet };
+        const result = await addUserToGroup(identifier, groupSlug, {
           expiresAt,
           grantedBy,
         });
@@ -221,22 +222,23 @@ export default async function groupRoutes(fastify) {
   /**
    * POST /groups/remove
    * Remove user from a group (admin only)
-   * Body: { fid: number, groupSlug: string }
+   * Body: { fid?: number, wallet?: string, groupSlug: string }
    */
   fastify.post(
     "/groups/remove",
     { preHandler: requireAdmin },
     async (request, reply) => {
-      const { fid, groupSlug } = request.body;
+      const { fid, wallet, groupSlug } = request.body;
 
-      if (!fid || !groupSlug) {
+      if ((!fid && !wallet) || !groupSlug) {
         return reply.code(400).send({
-          error: "fid and groupSlug are required",
+          error: "groupSlug and either fid or wallet are required",
         });
       }
 
       try {
-        const result = await removeUserFromGroup(fid, groupSlug);
+        const identifier = { fid: fid ? Number(fid) : undefined, wallet };
+        const result = await removeUserFromGroup(identifier, groupSlug);
 
         if (!result.success) {
           return reply.code(400).send({
@@ -279,7 +281,7 @@ export default async function groupRoutes(fastify) {
 
   /**
    * GET /user-groups/:fid
-   * Get all groups a user belongs to
+   * Get all groups a user belongs to (backward compat for FID-based lookup)
    */
   fastify.get("/user-groups/:fid", async (request, reply) => {
     const { fid } = request.params;
@@ -299,21 +301,51 @@ export default async function groupRoutes(fastify) {
   });
 
   /**
-   * GET /check-membership
-   * Check if user is in a specific group
-   * Query params: fid (number), groupSlug (string)
+   * GET /user-groups
+   * Get all groups a user belongs to (supports wallet query param)
+   * Query params: fid? (number), wallet? (string)
    */
-  fastify.get("/check-membership", async (request, reply) => {
-    const { fid, groupSlug } = request.query;
+  fastify.get("/user-groups", async (request, reply) => {
+    const { fid, wallet } = request.query;
 
-    if (!fid || !groupSlug) {
+    if (!fid && !wallet) {
       return reply.code(400).send({
-        error: "fid and groupSlug are required",
+        error: "Either fid or wallet query parameter is required",
       });
     }
 
     try {
-      const isMember = await isUserInGroup(parseInt(fid, 10), groupSlug);
+      const identifier = { fid: fid ? parseInt(fid, 10) : undefined, wallet };
+      const result = await getUserGroups(identifier);
+
+      return {
+        groups: result.groups,
+      };
+    } catch (error) {
+      fastify.log.error("Error getting user groups:", error);
+      return reply.code(500).send({
+        error: "Failed to get user groups",
+      });
+    }
+  });
+
+  /**
+   * GET /check-membership
+   * Check if user is in a specific group
+   * Query params: fid? (number), wallet? (string), groupSlug (string)
+   */
+  fastify.get("/check-membership", async (request, reply) => {
+    const { fid, wallet, groupSlug } = request.query;
+
+    if ((!fid && !wallet) || !groupSlug) {
+      return reply.code(400).send({
+        error: "groupSlug and either fid or wallet are required",
+      });
+    }
+
+    try {
+      const identifier = { fid: fid ? parseInt(fid, 10) : undefined, wallet };
+      const isMember = await isUserInGroup(identifier, groupSlug);
 
       return {
         isMember,

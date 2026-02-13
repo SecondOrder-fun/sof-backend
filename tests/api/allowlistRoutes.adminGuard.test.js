@@ -126,7 +126,7 @@ describe("allowlistRoutes admin guard", () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it("POST /add rejects wallet-only payload", async () => {
+  it("POST /add accepts wallet-only payload", async () => {
     const { getUserAccess } = await import("../../shared/accessService.js");
     getUserAccess.mockResolvedValueOnce({
       level: 4,
@@ -144,6 +144,29 @@ describe("allowlistRoutes admin guard", () => {
       method: "POST",
       url: "/add",
       payload: { wallet: "0x2222222222222222222222222222222222222222" },
+    });
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("POST /add rejects payload with neither fid nor wallet", async () => {
+    const { getUserAccess } = await import("../../shared/accessService.js");
+    getUserAccess.mockResolvedValueOnce({
+      level: 4,
+      levelName: "admin",
+      groups: [],
+      entry: { fid: 1 },
+    });
+
+    currentUser = {
+      fid: 1,
+      wallet_address: "0x1111111111111111111111111111111111111111",
+    };
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/add",
+      payload: {},
     });
 
     expect(res.statusCode).toBe(400);

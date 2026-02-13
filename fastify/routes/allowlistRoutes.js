@@ -180,36 +180,46 @@ export default async function allowlistRoutes(fastify) {
   /**
    * POST /api/allowlist/add
    * Manually add a user to the allowlist (admin)
-   * Body: { fid: number }
+   * Body: { fid?: number, wallet?: string }
    */
   fastify.post("/add", { preHandler: requireAdmin }, async (request, reply) => {
-    const { fid } = request.body || {};
+    const { fid, wallet } = request.body || {};
+
+    if (!fid && !wallet) {
+      return reply.code(400).send({ error: "Either fid or wallet is required" });
+    }
 
     try {
+      let identifier;
       if (fid) {
-        // Add by FID
         const fidNum = Number(fid);
         if (!Number.isFinite(fidNum) || fidNum <= 0) {
           return reply
             .code(400)
             .send({ error: "fid must be a positive number" });
         }
-
-        const result = await addToAllowlist(fidNum, "manual", true); // bypass time gate
-
-        if (!result.success) {
-          return reply.code(400).send({ error: result.error });
-        }
-
-        return reply.send({
-          success: true,
-          entry: result.entry,
-          alreadyExists: result.alreadyExists || false,
-          reactivated: result.reactivated || false,
-        });
+        identifier = fidNum;
       } else {
-        return reply.code(400).send({ error: "fid is required" });
+        if (!wallet.match(/^0x[a-fA-F0-9]{40}$/)) {
+          return reply
+            .code(400)
+            .send({ error: "Invalid wallet address format" });
+        }
+        identifier = { wallet };
       }
+
+      const result = await addToAllowlist(identifier, "manual", true); // bypass time gate
+
+      if (!result.success) {
+        return reply.code(400).send({ error: result.error });
+      }
+
+      return reply.send({
+        success: true,
+        entry: result.entry,
+        alreadyExists: result.alreadyExists || false,
+        reactivated: result.reactivated || false,
+      });
     } catch (error) {
       fastify.log.error({ error }, "Failed to add to allowlist");
       return reply.code(500).send({ error: "Failed to add to allowlist" });
@@ -219,25 +229,31 @@ export default async function allowlistRoutes(fastify) {
   /**
    * POST /api/allowlist/remove
    * Remove a user from the allowlist (admin, soft delete)
-   * Body: { fid: number }
+   * Body: { fid?: number, wallet?: string }
    */
   fastify.post(
     "/remove",
     { preHandler: requireAdmin },
     async (request, reply) => {
-      const { fid } = request.body || {};
+      const { fid, wallet } = request.body || {};
 
-      if (!fid) {
-        return reply.code(400).send({ error: "fid is required" });
-      }
-
-      const fidNum = Number(fid);
-      if (!Number.isFinite(fidNum) || fidNum <= 0) {
-        return reply.code(400).send({ error: "fid must be a positive number" });
+      if (!fid && !wallet) {
+        return reply.code(400).send({ error: "Either fid or wallet is required" });
       }
 
       try {
-        const result = await removeFromAllowlist(fidNum);
+        let identifier;
+        if (fid) {
+          const fidNum = Number(fid);
+          if (!Number.isFinite(fidNum) || fidNum <= 0) {
+            return reply.code(400).send({ error: "fid must be a positive number" });
+          }
+          identifier = fidNum;
+        } else {
+          identifier = { wallet };
+        }
+
+        const result = await removeFromAllowlist(identifier);
 
         if (!result.success) {
           return reply.code(400).send({ error: result.error });

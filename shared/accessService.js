@@ -65,7 +65,7 @@ export async function getUserAccess({ fid, wallet }) {
     }
 
     // Get user's groups
-    const groups = await getUserGroups(entry.fid);
+    const groups = await getUserGroups({ fid: entry.fid, wallet: entry.wallet_address });
 
     return {
       level: entry.access_level ?? ACCESS_LEVELS.ALLOWLIST,
@@ -246,22 +246,35 @@ export async function getRouteConfig(route, resourceType, resourceId) {
 
 /**
  * Set user's access level
- * @param {number} fid - Farcaster ID
+ * @param {object|number} identifier - { fid?, wallet? } or FID number (backward compat)
  * @param {number} level - New access level (0-4)
  * @returns {Promise<{success: boolean, entry?: object}>}
  */
-export async function setUserAccessLevel(fid, level) {
+export async function setUserAccessLevel(identifier, level) {
   try {
     if (level < 0 || level > 4) {
       throw new Error("Invalid access level. Must be 0-4.");
     }
 
-    const { data, error } = await supabase
+    // Backward compat: accept plain FID number
+    const { fid, wallet } =
+      typeof identifier === "object" ? identifier : { fid: identifier, wallet: undefined };
+
+    if (!fid && !wallet) {
+      throw new Error("Either fid or wallet is required");
+    }
+
+    let query = supabase
       .from("allowlist_entries")
-      .update({ access_level: level, updated_at: new Date().toISOString() })
-      .eq("fid", fid)
-      .select()
-      .single();
+      .update({ access_level: level, updated_at: new Date().toISOString() });
+
+    if (fid) {
+      query = query.eq("fid", fid);
+    } else {
+      query = query.eq("wallet_address", wallet.toLowerCase());
+    }
+
+    const { data, error } = await query.select().single();
 
     if (error) throw error;
 
@@ -321,17 +334,29 @@ export async function setDefaultAccessLevel(level) {
 
 /**
  * Get user's groups
- * @param {number} fid - Farcaster ID
+ * @param {object|number} identifier - { fid?, wallet? } or FID number (backward compat)
  * @returns {Promise<string[]>}
  */
-export async function getUserGroups(fid) {
+export async function getUserGroups(identifier) {
   try {
-    const { data, error } = await supabase
+    const { fid, wallet } =
+      typeof identifier === "object" ? identifier : { fid: identifier, wallet: undefined };
+
+    if (!fid && !wallet) return [];
+
+    let query = supabase
       .from("user_access_groups")
       .select("access_groups(slug)")
-      .eq("fid", fid)
       .eq("is_active", true)
       .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`);
+
+    if (fid) {
+      query = query.eq("fid", fid);
+    } else {
+      query = query.eq("wallet_address", wallet.toLowerCase());
+    }
+
+    const { data, error } = await query;
 
     if (error) throw error;
 
