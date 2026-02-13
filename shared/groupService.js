@@ -129,35 +129,45 @@ export async function deleteGroup(slug) {
 
 /**
  * Add user to group
- * @param {number} fid - Farcaster ID
+ * @param {object|number} identifier - { fid?, wallet? } or FID number (backward compat)
  * @param {string} groupSlug - Group identifier
  * @param {object} options - { expiresAt?, grantedBy? }
  * @returns {Promise<{success: boolean}>}
  */
-export async function addUserToGroup(fid, groupSlug, options = {}) {
+export async function addUserToGroup(identifier, groupSlug, options = {}) {
   try {
+    const { fid, wallet } =
+      typeof identifier === "object" ? identifier : { fid: identifier, wallet: undefined };
+
+    if (!fid && !wallet) {
+      throw new Error("Either fid or wallet is required");
+    }
+
     // Get group ID from slug
     const group = await getGroupBySlug(groupSlug);
     if (!group) {
       throw new Error(`Group not found: ${groupSlug}`);
     }
 
-    const { data, error } = await supabase
+    const insertRow = {
+      fid: fid || null,
+      wallet_address: wallet ? wallet.toLowerCase() : null,
+      group_id: group.id,
+      granted_by: options.grantedBy || "system",
+      expires_at: options.expiresAt || null,
+      is_active: true,
+    };
+
+    const { error } = await supabase
       .from("user_access_groups")
-      .insert({
-        fid,
-        group_id: group.id,
-        granted_by: options.grantedBy || "system",
-        expires_at: options.expiresAt || null,
-        is_active: true,
-      })
+      .insert(insertRow)
       .select()
       .single();
 
     if (error) {
       // If duplicate, update instead
       if (error.code === "23505") {
-        const { error: updateError } = await supabase
+        let updateQuery = supabase
           .from("user_access_groups")
           .update({
             is_active: true,
@@ -165,9 +175,15 @@ export async function addUserToGroup(fid, groupSlug, options = {}) {
             expires_at: options.expiresAt || null,
             granted_at: new Date().toISOString(),
           })
-          .eq("fid", fid)
           .eq("group_id", group.id);
 
+        if (fid) {
+          updateQuery = updateQuery.eq("fid", fid);
+        } else {
+          updateQuery = updateQuery.eq("wallet_address", wallet.toLowerCase());
+        }
+
+        const { error: updateError } = await updateQuery;
         if (updateError) throw updateError;
         return { success: true };
       }
@@ -183,23 +199,37 @@ export async function addUserToGroup(fid, groupSlug, options = {}) {
 
 /**
  * Remove user from group
- * @param {number} fid - Farcaster ID
+ * @param {object|number} identifier - { fid?, wallet? } or FID number (backward compat)
  * @param {string} groupSlug - Group identifier
  * @returns {Promise<{success: boolean}>}
  */
-export async function removeUserFromGroup(fid, groupSlug) {
+export async function removeUserFromGroup(identifier, groupSlug) {
   try {
+    const { fid, wallet } =
+      typeof identifier === "object" ? identifier : { fid: identifier, wallet: undefined };
+
+    if (!fid && !wallet) {
+      throw new Error("Either fid or wallet is required");
+    }
+
     // Get group ID from slug
     const group = await getGroupBySlug(groupSlug);
     if (!group) {
       throw new Error(`Group not found: ${groupSlug}`);
     }
 
-    const { error } = await supabase
+    let query = supabase
       .from("user_access_groups")
       .update({ is_active: false })
-      .eq("fid", fid)
       .eq("group_id", group.id);
+
+    if (fid) {
+      query = query.eq("fid", fid);
+    } else {
+      query = query.eq("wallet_address", wallet.toLowerCase());
+    }
+
+    const { error } = await query;
 
     if (error) throw error;
 
@@ -212,17 +242,29 @@ export async function removeUserFromGroup(fid, groupSlug) {
 
 /**
  * Get user's groups
- * @param {number} fid - Farcaster ID
+ * @param {object|number} identifier - { fid?, wallet? } or FID number (backward compat)
  * @returns {Promise<{groups: string[]}>}
  */
-export async function getUserGroups(fid) {
+export async function getUserGroups(identifier) {
   try {
-    const { data, error } = await supabase
+    const { fid, wallet } =
+      typeof identifier === "object" ? identifier : { fid: identifier, wallet: undefined };
+
+    if (!fid && !wallet) return { groups: [] };
+
+    let query = supabase
       .from("user_access_groups")
       .select("access_groups(slug, name)")
-      .eq("fid", fid)
       .eq("is_active", true)
       .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`);
+
+    if (fid) {
+      query = query.eq("fid", fid);
+    } else {
+      query = query.eq("wallet_address", wallet.toLowerCase());
+    }
+
+    const { data, error } = await query;
 
     if (error) throw error;
 
@@ -253,7 +295,7 @@ export async function getGroupMembers(groupSlug) {
 
     const { data, error } = await supabase
       .from("user_access_groups")
-      .select("fid, granted_at, granted_by, expires_at")
+      .select("fid, wallet_address, granted_at, granted_by, expires_at")
       .eq("group_id", group.id)
       .eq("is_active", true)
       .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
@@ -270,23 +312,34 @@ export async function getGroupMembers(groupSlug) {
 
 /**
  * Check if user is in group
- * @param {number} fid - Farcaster ID
+ * @param {object|number} identifier - { fid?, wallet? } or FID number (backward compat)
  * @param {string} groupSlug - Group identifier
  * @returns {Promise<boolean>}
  */
-export async function isUserInGroup(fid, groupSlug) {
+export async function isUserInGroup(identifier, groupSlug) {
   try {
+    const { fid, wallet } =
+      typeof identifier === "object" ? identifier : { fid: identifier, wallet: undefined };
+
+    if (!fid && !wallet) return false;
+
     const group = await getGroupBySlug(groupSlug);
     if (!group) return false;
 
-    const { data, error } = await supabase
+    let query = supabase
       .from("user_access_groups")
       .select("id")
-      .eq("fid", fid)
       .eq("group_id", group.id)
       .eq("is_active", true)
-      .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
-      .single();
+      .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`);
+
+    if (fid) {
+      query = query.eq("fid", fid);
+    } else {
+      query = query.eq("wallet_address", wallet.toLowerCase());
+    }
+
+    const { data, error } = await query.single();
 
     if (error) return false;
 
