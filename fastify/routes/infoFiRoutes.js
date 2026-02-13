@@ -415,6 +415,125 @@ export default async function infoFiRoutes(fastify) {
   });
 
   /**
+   * GET /api/infofi/markets/batch-info?ids=1,2,3
+   * Batch fetch market pool info (reserves and volume) for multiple markets
+   *
+   * Query params:
+   * - ids: Comma-separated market IDs (max 50)
+   *
+   * Returns: { results: { "1": { totalYesPool, totalNoPool, volume }, ... } }
+   */
+  fastify.get("/markets/batch-info", async (request, reply) => {
+    try {
+      const { ids } = request.query;
+      if (!ids) {
+        return reply.code(400).send({ error: "ids query parameter is required" });
+      }
+
+      const marketIds = ids
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean)
+        .slice(0, 50);
+
+      if (marketIds.length === 0) {
+        return reply.send({ results: {} });
+      }
+
+      // Get all markets with their contract addresses
+      const { data: markets, error: marketsError } = await supabase
+        .from("infofi_markets")
+        .select("id, contract_address")
+        .in("id", marketIds.map(Number));
+
+      if (marketsError) {
+        fastify.log.error({ error: marketsError }, "Failed to fetch markets for batch-info");
+        return reply.code(500).send({
+          error: "Failed to fetch markets",
+          details: marketsError.message,
+        });
+      }
+
+      const simpleFpmmAbi = (await import("../../src/abis/SimpleFPMMAbi.js")).default;
+      const WEI = 10n ** 18n;
+      const results = {};
+
+      // Process all markets in parallel
+      await Promise.all(
+        (markets || []).map(async (market) => {
+          const mid = String(market.id);
+
+          let totalYesPool = "0";
+          let totalNoPool = "0";
+
+          // Read on-chain reserves if contract exists
+          if (market.contract_address) {
+            try {
+              const [yesReserve, noReserve] = await Promise.all([
+                publicClient.readContract({
+                  address: market.contract_address,
+                  abi: simpleFpmmAbi,
+                  functionName: "yesReserve",
+                }),
+                publicClient.readContract({
+                  address: market.contract_address,
+                  abi: simpleFpmmAbi,
+                  functionName: "noReserve",
+                }),
+              ]);
+              totalYesPool = yesReserve.toString();
+              totalNoPool = noReserve.toString();
+            } catch (chainError) {
+              fastify.log.warn(
+                { chainError: chainError.message, address: market.contract_address },
+                "Failed to read FPMM reserves from chain (batch)"
+              );
+            }
+          }
+
+          // Get volume from positions table
+          const { data: volumeData, error: volumeError } = await supabase
+            .from("infofi_positions")
+            .select("amount")
+            .eq("market_id", market.id);
+
+          let volumeWei = 0n;
+          if (!volumeError && volumeData) {
+            for (const pos of volumeData) {
+              try {
+                const humanAmount = parseFloat(pos.amount || "0");
+                if (humanAmount > 0) {
+                  const wholePart = BigInt(Math.floor(humanAmount));
+                  const fracPart = BigInt(
+                    Math.round((humanAmount - Math.floor(humanAmount)) * 1e18)
+                  );
+                  volumeWei += wholePart * WEI + fracPart;
+                }
+              } catch {
+                // Skip invalid amounts
+              }
+            }
+          }
+
+          results[mid] = {
+            totalYesPool,
+            totalNoPool,
+            volume: volumeWei.toString(),
+          };
+        })
+      );
+
+      return reply.send({ results });
+    } catch (error) {
+      fastify.log.error({ error }, "Failed to fetch batch market info");
+      return reply.code(500).send({
+        error: "Failed to fetch batch market info",
+        details: error.message,
+      });
+    }
+  });
+
+  /**
    * GET /api/infofi/markets/:marketId/history
    * Get historical odds for a market
    *
@@ -767,6 +886,93 @@ export default async function infoFiRoutes(fastify) {
       fastify.log.error({ error }, "Error fetching net position");
       return reply.code(500).send({
         error: "Failed to fetch net position",
+        details: error.message,
+      });
+    }
+  });
+
+  /**
+   * GET /api/infofi/positions/:userAddress/batch?marketIds=1,2,3
+   * Batch fetch net positions for a user across multiple markets
+   *
+   * Query params:
+   * - marketIds: Comma-separated market IDs (max 50)
+   *
+   * Returns: { results: { "1": { yes, no, net, isHedged }, ... } }
+   */
+  fastify.get("/positions/:userAddress/batch", async (request, reply) => {
+    try {
+      const { userAddress } = request.params;
+      const { marketIds } = request.query;
+
+      if (!marketIds) {
+        return reply.code(400).send({
+          error: "marketIds query parameter is required",
+        });
+      }
+
+      const ids = marketIds
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean)
+        .slice(0, 50);
+
+      if (ids.length === 0) {
+        return reply.send({ results: {} });
+      }
+
+      const toWei = (humanStr) => {
+        const num = parseFloat(humanStr || "0");
+        if (num === 0) return "0";
+        const wholePart = BigInt(Math.floor(Math.abs(num)));
+        const fracPart = BigInt(
+          Math.round((Math.abs(num) - Math.floor(Math.abs(num))) * 1e18)
+        );
+        const wei = wholePart * (10n ** 18n) + fracPart;
+        return num < 0 ? (-wei).toString() : wei.toString();
+      };
+
+      const results = {};
+
+      // Process all markets in parallel
+      await Promise.all(
+        ids.map(async (marketId) => {
+          try {
+            const netPosition = await infoFiPositionService.getNetPosition(
+              userAddress,
+              parseInt(marketId)
+            );
+
+            results[marketId] = {
+              yes: toWei(netPosition.yes),
+              no: toWei(netPosition.no),
+              net: toWei(netPosition.net),
+              isHedged: netPosition.isHedged,
+              numTradesYes: netPosition.numTradesYes,
+              numTradesNo: netPosition.numTradesNo,
+            };
+          } catch (err) {
+            fastify.log.warn(
+              { marketId, error: err.message },
+              "Failed to fetch net position for market (batch)"
+            );
+            results[marketId] = {
+              yes: "0",
+              no: "0",
+              net: "0",
+              isHedged: false,
+              numTradesYes: 0,
+              numTradesNo: 0,
+            };
+          }
+        })
+      );
+
+      return reply.send({ results });
+    } catch (error) {
+      fastify.log.error({ error }, "Error fetching batch positions");
+      return reply.code(500).send({
+        error: "Failed to fetch batch positions",
         details: error.message,
       });
     }
