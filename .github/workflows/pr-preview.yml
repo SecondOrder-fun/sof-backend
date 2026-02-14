@@ -204,32 +204,45 @@ jobs:
           PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           # Find the most recent READY preview deployment
-          DEP=$(curl -sf \
+          DEP=$(curl -s \
             "https://api.vercel.com/v6/deployments?projectId=${PROJECT_ID}&target=preview&state=READY&limit=1&teamId=${TEAM_ID}" \
             -H "Authorization: Bearer $VERCEL_TOKEN")
 
           DEP_ID=$(echo "$DEP" | jq -r '.deployments[0].uid // empty')
+          DEP_NAME=$(echo "$DEP" | jq -r '.deployments[0].name // empty')
+          DEP_META=$(echo "$DEP" | jq -c '.deployments[0].meta // {}')
+          GIT_REF=$(echo "$DEP" | jq -r '.deployments[0].gitSource.ref // empty')
 
           if [ -z "$DEP_ID" ]; then
             echo "::warning::No preview deployment found to redeploy"
             exit 0
           fi
 
-          echo "Redeploying: $DEP_ID"
+          echo "Redeploying: $DEP_ID (name=$DEP_NAME, ref=$GIT_REF)"
 
-          RESULT=$(curl -sf -X POST \
-            "https://api.vercel.com/v13/deployments?teamId=${TEAM_ID}" \
+          # Redeploy using the deployment ID — Vercel copies git source from the original
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://api.vercel.com/v13/deployments?teamId=${TEAM_ID}&forceNew=1" \
             -H "Authorization: Bearer $VERCEL_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{
-              \"name\": \"sof-alpha\",
+              \"name\": \"${DEP_NAME}\",
               \"deploymentId\": \"${DEP_ID}\",
+              \"meta\": ${DEP_META},
               \"target\": \"preview\"
             }")
 
-          URL=$(echo "$RESULT" | jq -r '.url // empty')
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
-          echo "Vercel redeployment: https://$URL"
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            URL=$(echo "$BODY" | jq -r '.url // empty')
+            echo "url=$URL" >> "$GITHUB_OUTPUT"
+            echo "Vercel redeployment triggered: https://$URL"
+          else
+            echo "::warning::Vercel redeployment failed (HTTP $HTTP_CODE): $BODY"
+            echo "Env var was updated — next Vercel push will pick it up automatically"
+          fi
 
       - name: Wait for Vercel deployment
         if: steps.vercel.outputs.url
@@ -249,6 +262,7 @@ jobs:
           echo "::warning::Vercel deployment timed out"
 
       - name: Comment on PR with preview URLs
+        if: always() && steps.railway.outputs.url
         uses: actions/github-script@v7
         with:
           script: |
