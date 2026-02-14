@@ -126,9 +126,11 @@ jobs:
 
           CURRENT_CORS=$(echo "$VARS" | jq -r '.data.variables.CORS_ORIGINS // empty')
 
-          # Add Vercel preview regex pattern if not already present
-          if echo "$CURRENT_CORS" | grep -q 'vercel\.app'; then
-            echo "CORS already includes Vercel pattern"
+          # Add Vercel preview regex pattern if not already present.
+          # Check for the actual regex syntax "/...vercel.../" — not just "vercel.app"
+          # which would false-match a specific URL like "https://foo.vercel.app".
+          if echo "$CURRENT_CORS" | grep -qF '/\.vercel\.app'; then
+            echo "CORS already includes Vercel regex pattern"
           else
             NEW_CORS="${CURRENT_CORS},/\\.vercel\\.app\$/"
             echo "Updating CORS_ORIGINS → $NEW_CORS"
