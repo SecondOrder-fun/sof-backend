@@ -20,6 +20,10 @@ export class AuthService {
       role: user.role || "user",
     };
 
+    if (user.fid) {
+      payload.fid = user.fid;
+    }
+
     return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
   }
 
@@ -49,15 +53,25 @@ export class AuthService {
     return result.user;
   }
 
-  static async authenticateFarcaster(request) {
-    // request parameter required by interface but not used in this implementation
-    if (request) {
-      // Intentionally empty - request parameter required by interface
+  static async authenticateFarcaster(message, signature, nonce) {
+    const { createAppClient, viemConnector } = await import("@farcaster/auth-client");
+
+    const appClient = createAppClient({ ethereum: viemConnector() });
+
+    const domain = process.env.SIWF_DOMAIN || "secondorder.fun";
+
+    const result = await appClient.verifySignInMessage({
+      message,
+      signature,
+      domain,
+      nonce,
+    });
+
+    if (!result.success) {
+      throw new Error("SIWF signature verification failed");
     }
-    // TODO: Implement Farcaster authentication
-    // This would involve verifying the Farcaster signature
-    // and creating or retrieving the user
-    return null;
+
+    return { fid: result.fid };
   }
 
 }
