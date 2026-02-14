@@ -220,7 +220,9 @@ jobs:
 
           echo "Redeploying: $DEP_ID (name=$DEP_NAME, ref=$GIT_REF)"
 
-          # Redeploy using the deployment ID — Vercel copies git source from the original
+          # Redeploy using the deployment ID — Vercel copies git source from the original.
+          # Omit "target" — Vercel only accepts "production", "staging", or a custom env ID.
+          # Preview deployments are inferred from the source deployment's context.
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             "https://api.vercel.com/v13/deployments?teamId=${TEAM_ID}&forceNew=1" \
             -H "Authorization: Bearer $VERCEL_TOKEN" \
@@ -228,8 +230,7 @@ jobs:
             -d "{
               \"name\": \"${DEP_NAME}\",
               \"deploymentId\": \"${DEP_ID}\",
-              \"meta\": ${DEP_META},
-              \"target\": \"preview\"
+              \"meta\": ${DEP_META}
             }")
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
