@@ -44,13 +44,21 @@ const corsOriginsEnv = process.env.CORS_ORIGINS;
 let corsOrigin;
 
 if (corsOriginsEnv && corsOriginsEnv.trim().length > 0) {
-  // Comma-separated list from env, e.g. "http://127.0.0.1:5173,http://localhost:5173,https://secondorder.fun"
+  // Comma-separated list from env.
+  // Entries wrapped in / are treated as RegExp patterns, e.g.:
+  //   CORS_ORIGINS="https://secondorder.fun,/\.vercel\.app$/"
   corsOrigin = corsOriginsEnv
     .split(",")
     .map((v) => {
       const trimmed = v.trim();
-      // Normalize: strip a single trailing slash so
-      // "https://foo.com/" matches origin "https://foo.com".
+      if (!trimmed) return null;
+
+      // Regex entry: /pattern/
+      if (trimmed.startsWith("/") && trimmed.endsWith("/") && trimmed.length > 2) {
+        return new RegExp(trimmed.slice(1, -1));
+      }
+
+      // Plain string: normalize trailing slash
       return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
     })
     .filter(Boolean);

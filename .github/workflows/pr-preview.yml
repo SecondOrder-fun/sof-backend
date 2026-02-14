@@ -1,0 +1,334 @@
+# PR Preview Orchestrator
+#
+# When Railway deploys a backend PR environment, this workflow:
+#   1. Queries Railway's API for the PR environment's public URL
+#   2. Health-checks the backend deployment
+#   3. Upserts VITE_API_BASE_URL on Vercel (preview scope) — no duplicates
+#   4. Triggers a Vercel redeployment so the frontend picks up the new backend URL
+#   5. Waits for both deployments to be live
+#   6. Comments on the PR with both preview URLs
+#
+# When the PR is closed/merged, it resets the Vercel env var to production.
+#
+# Required secrets (set in repo Settings → Secrets):
+#   RAILWAY_API_TOKEN    — Railway account or workspace token
+#   RAILWAY_PROJECT_ID   — Railway project ID
+#   RAILWAY_SERVICE_ID   — Railway service ID (main API service)
+#   VERCEL_TOKEN         — Vercel API token
+#   VERCEL_TEAM_ID       — Vercel team/org ID
+#   VERCEL_PROJECT_ID    — Vercel project ID for the frontend (sof-alpha)
+#
+# Required variables (set in repo Settings → Variables):
+#   PRODUCTION_API_URL   — Production backend URL, e.g. https://sof-alpha-production.up.railway.app/api
+
+name: PR Preview Orchestrator
+
+on:
+  deployment_status:
+  pull_request:
+    types: [closed]
+
+jobs:
+  # ─── Sync preview environments when Railway deploys a PR env ────────
+  sync-preview:
+    if: >-
+      github.event_name == 'deployment_status' &&
+      github.event.deployment_status.state == 'success' &&
+      contains(github.event.deployment.environment, 'pr-')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      deployments: read
+
+    steps:
+      - name: Extract PR number from Railway environment
+        id: pr-info
+        run: |
+          ENV_NAME="${{ github.event.deployment.environment }}"
+          echo "Railway environment: $ENV_NAME"
+
+          # Railway names PR envs like "AppName / repo-pr-N" or just "pr-N"
+          PR_NUM=$(echo "$ENV_NAME" | grep -oP 'pr-\K\d+' || true)
+          if [ -z "$PR_NUM" ]; then
+            echo "::error::Could not extract PR number from: $ENV_NAME"
+            exit 1
+          fi
+          echo "pr_number=$PR_NUM" >> "$GITHUB_OUTPUT"
+
+      - name: Query Railway API for PR environment URL
+        id: railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+          SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID }}
+        run: |
+          PR_NUM="${{ steps.pr-info.outputs.pr_number }}"
+
+          # 1. List environments → find the one matching pr-<N>
+          ENVS=$(curl -sf -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"query\": \"query(\$pid:String!){environments(projectId:\$pid){edges{node{id name}}}}\",
+              \"variables\": {\"pid\":\"$PROJECT_ID\"}
+            }")
+
+          ENV_ID=$(echo "$ENVS" | jq -r \
+            ".data.environments.edges[]
+             | select(.node.name | test(\"pr-${PR_NUM}$\"))
+             | .node.id")
+
+          if [ -z "$ENV_ID" ] || [ "$ENV_ID" = "null" ]; then
+            echo "::error::Railway environment not found for PR #$PR_NUM"
+            echo "Available environments:"
+            echo "$ENVS" | jq '.data.environments.edges[].node.name'
+            exit 1
+          fi
+          echo "env_id=$ENV_ID" >> "$GITHUB_OUTPUT"
+
+          # 2. Query service domains for this environment
+          DOMAINS=$(curl -sf -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"query\": \"query{domains(projectId:\\\"$PROJECT_ID\\\",environmentId:\\\"$ENV_ID\\\",serviceId:\\\"$SERVICE_ID\\\"){serviceDomains{domain}}}\",
+              \"variables\": {}
+            }")
+
+          DOMAIN=$(echo "$DOMAINS" | jq -r '.data.domains.serviceDomains[0].domain // empty')
+
+          if [ -z "$DOMAIN" ]; then
+            echo "::error::No domain found for Railway PR environment $ENV_ID"
+            echo "Domains response: $DOMAINS"
+            exit 1
+          fi
+
+          echo "domain=$DOMAIN" >> "$GITHUB_OUTPUT"
+          echo "url=https://${DOMAIN}/api" >> "$GITHUB_OUTPUT"
+          echo "Railway backend: https://${DOMAIN}/api"
+
+      - name: Update Railway PR environment CORS
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+          SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID }}
+        run: |
+          ENV_ID="${{ steps.railway.outputs.env_id }}"
+
+          # Get current CORS_ORIGINS from the PR environment
+          VARS=$(curl -sf -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"query\": \"query{variables(projectId:\\\"$PROJECT_ID\\\",environmentId:\\\"$ENV_ID\\\",serviceId:\\\"$SERVICE_ID\\\")}\",
+              \"variables\": {}
+            }")
+
+          CURRENT_CORS=$(echo "$VARS" | jq -r '.data.variables.CORS_ORIGINS // empty')
+
+          # Add Vercel preview regex pattern if not already present
+          if echo "$CURRENT_CORS" | grep -q 'vercel\.app'; then
+            echo "CORS already includes Vercel pattern"
+          else
+            NEW_CORS="${CURRENT_CORS},/\\.vercel\\.app\$/"
+            echo "Updating CORS_ORIGINS → $NEW_CORS"
+
+            curl -sf -X POST https://backboard.railway.com/graphql/v2 \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"query\": \"mutation(\$input:VariableUpsertInput!){variableUpsert(input:\$input)}\",
+                \"variables\": {
+                  \"input\": {
+                    \"projectId\": \"$PROJECT_ID\",
+                    \"environmentId\": \"$ENV_ID\",
+                    \"serviceId\": \"$SERVICE_ID\",
+                    \"name\": \"CORS_ORIGINS\",
+                    \"value\": \"$NEW_CORS\"
+                  }
+                }
+              }"
+          fi
+
+      - name: Health-check Railway backend
+        run: |
+          URL="${{ steps.railway.outputs.url }}/health"
+          echo "Health-checking: $URL"
+
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$URL" 2>/dev/null || echo 000)
+            if [ "$CODE" -ge 200 ] && [ "$CODE" -lt 500 ]; then
+              echo "Backend live (HTTP $CODE)"
+              exit 0
+            fi
+            echo "Attempt $i/30 → HTTP $CODE, retrying in 10s..."
+            sleep 10
+          done
+          echo "::warning::Backend health-check timed out — continuing"
+
+      - name: Upsert VITE_API_BASE_URL on Vercel (preview scope)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          BACKEND_URL="${{ steps.railway.outputs.url }}"
+
+          # upsert=true: updates existing key+target combo, or creates if missing
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://api.vercel.com/v10/projects/${PROJECT_ID}/env?upsert=true&teamId=${TEAM_ID}" \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "[{
+              \"key\": \"VITE_API_BASE_URL\",
+              \"value\": \"${BACKEND_URL}\",
+              \"type\": \"plain\",
+              \"target\": [\"preview\"]
+            }]")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Vercel env upsert failed (HTTP $HTTP_CODE): $BODY"
+            exit 1
+          fi
+
+          echo "VITE_API_BASE_URL → $BACKEND_URL"
+
+      - name: Redeploy latest Vercel preview
+        id: vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          # Find the most recent READY preview deployment
+          DEP=$(curl -sf \
+            "https://api.vercel.com/v6/deployments?projectId=${PROJECT_ID}&target=preview&state=READY&limit=1&teamId=${TEAM_ID}" \
+            -H "Authorization: Bearer $VERCEL_TOKEN")
+
+          DEP_ID=$(echo "$DEP" | jq -r '.deployments[0].uid // empty')
+
+          if [ -z "$DEP_ID" ]; then
+            echo "::warning::No preview deployment found to redeploy"
+            exit 0
+          fi
+
+          echo "Redeploying: $DEP_ID"
+
+          RESULT=$(curl -sf -X POST \
+            "https://api.vercel.com/v13/deployments?teamId=${TEAM_ID}" \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"name\": \"sof-alpha\",
+              \"deploymentId\": \"${DEP_ID}\",
+              \"target\": \"preview\"
+            }")
+
+          URL=$(echo "$RESULT" | jq -r '.url // empty')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Vercel redeployment: https://$URL"
+
+      - name: Wait for Vercel deployment
+        if: steps.vercel.outputs.url
+        run: |
+          URL="https://${{ steps.vercel.outputs.url }}"
+          echo "Waiting for: $URL"
+
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$URL" 2>/dev/null || echo 000)
+            if [ "$CODE" = "200" ]; then
+              echo "Vercel deployment live!"
+              exit 0
+            fi
+            echo "Attempt $i/30 → HTTP $CODE, retrying in 10s..."
+            sleep 10
+          done
+          echo "::warning::Vercel deployment timed out"
+
+      - name: Comment on PR with preview URLs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = parseInt('${{ steps.pr-info.outputs.pr_number }}');
+            const backendDomain = '${{ steps.railway.outputs.domain }}';
+            const backendUrl = '${{ steps.railway.outputs.url }}';
+            const vercelUrl = '${{ steps.vercel.outputs.url }}';
+
+            const body = [
+              '## Preview Environment',
+              '',
+              '| Service | URL |',
+              '|---------|-----|',
+              `| Backend (Railway) | https://${backendDomain} |`,
+              vercelUrl
+                ? `| Frontend (Vercel) | https://${vercelUrl} |`
+                : '| Frontend (Vercel) | _redeployment pending_ |',
+              '',
+              '```',
+              `VITE_API_BASE_URL=${backendUrl}`,
+              '```',
+            ].join('\n');
+
+            // Update existing comment if present, otherwise create
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr,
+            });
+
+            const existing = comments.find(c =>
+              c.body?.startsWith('## Preview Environment')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr,
+                body,
+              });
+            }
+
+  # ─── Cleanup: reset Vercel env var when PR is closed/merged ─────────
+  cleanup:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Reset VITE_API_BASE_URL to production
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          PROD_URL="${{ vars.PRODUCTION_API_URL }}"
+
+          if [ -z "$PROD_URL" ]; then
+            echo "::warning::PRODUCTION_API_URL variable not set — skipping reset"
+            exit 0
+          fi
+
+          curl -sf -X POST \
+            "https://api.vercel.com/v10/projects/${PROJECT_ID}/env?upsert=true&teamId=${TEAM_ID}" \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "[{
+              \"key\": \"VITE_API_BASE_URL\",
+              \"value\": \"${PROD_URL}\",
+              \"type\": \"plain\",
+              \"target\": [\"preview\"]
+            }]"
+
+          echo "Reset VITE_API_BASE_URL → $PROD_URL"
