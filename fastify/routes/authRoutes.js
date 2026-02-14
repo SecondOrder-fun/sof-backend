@@ -125,7 +125,8 @@ export default async function authRoutes(fastify) {
    * Returns { nonce } for SIWF message signing. No address needed.
    */
   fastify.get("/farcaster/nonce", async (_request, reply) => {
-    const nonce = crypto.randomUUID();
+    // SIWE spec requires alphanumeric nonces — strip UUID hyphens
+    const nonce = crypto.randomUUID().replaceAll("-", "");
     const redis = redisClient.getClient();
 
     await redis.set(`auth:farcaster_nonce:${nonce}`, "1", "EX", NONCE_TTL_SECONDS);
