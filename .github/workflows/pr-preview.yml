@@ -132,24 +132,32 @@ jobs:
           if echo "$CURRENT_CORS" | grep -qF '/\.vercel\.app'; then
             echo "CORS already includes Vercel regex pattern"
           else
-            NEW_CORS="${CURRENT_CORS},/\\.vercel\\.app\$/"
+            NEW_CORS="${CURRENT_CORS},/\.vercel\.app\$/"
             echo "Updating CORS_ORIGINS → $NEW_CORS"
 
-            curl -sf -X POST https://backboard.railway.com/graphql/v2 \
+            # Use jq to build the JSON payload — avoids shell escaping issues
+            # with special chars ($, \) in the CORS regex value
+            PAYLOAD=$(jq -n \
+              --arg query 'mutation($input:VariableUpsertInput!){variableUpsert(input:$input)}' \
+              --arg pid "$PROJECT_ID" \
+              --arg eid "$ENV_ID" \
+              --arg sid "$SERVICE_ID" \
+              --arg val "$NEW_CORS" \
+              '{query: $query, variables: {input: {projectId: $pid, environmentId: $eid, serviceId: $sid, name: "CORS_ORIGINS", value: $val}}}')
+
+            RESULT=$(curl -s -w "\n%{http_code}" -X POST https://backboard.railway.com/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{
-                \"query\": \"mutation(\$input:VariableUpsertInput!){variableUpsert(input:\$input)}\",
-                \"variables\": {
-                  \"input\": {
-                    \"projectId\": \"$PROJECT_ID\",
-                    \"environmentId\": \"$ENV_ID\",
-                    \"serviceId\": \"$SERVICE_ID\",
-                    \"name\": \"CORS_ORIGINS\",
-                    \"value\": \"$NEW_CORS\"
-                  }
-                }
-              }"
+              -d "$PAYLOAD")
+
+            HTTP_CODE=$(echo "$RESULT" | tail -1)
+            BODY=$(echo "$RESULT" | sed '$d')
+
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+              echo "CORS_ORIGINS updated successfully"
+            else
+              echo "::warning::Failed to update CORS_ORIGINS (HTTP $HTTP_CODE): $BODY"
+            fi
           fi
 
       - name: Health-check Railway backend
