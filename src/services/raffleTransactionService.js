@@ -272,6 +272,27 @@ class RaffleTransactionService {
   }
 
   /**
+   * Get all transactions for a season (paginated)
+   */
+  async getSeasonTransactions(seasonId, options = {}) {
+    const {
+      limit = 200,
+      offset = 0,
+      order = "desc",
+    } = options;
+
+    const { data, error, count } = await db.client
+      .from("raffle_transactions")
+      .select("*", { count: "exact" })
+      .eq("season_id", seasonId)
+      .order("block_timestamp", { ascending: order === "asc" })
+      .range(offset, offset + limit - 1);
+
+    if (error) throw error;
+    return { transactions: data, total: count };
+  }
+
+  /**
    * Get user's transaction history for a season
    */
   async getUserTransactions(userAddress, seasonId, options = {}) {

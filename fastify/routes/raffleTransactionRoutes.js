@@ -5,6 +5,31 @@ import { raffleTransactionService } from "../../src/services/raffleTransactionSe
  * Provides endpoints for querying user transaction history and positions
  */
 export default async function raffleTransactionRoutes(fastify) {
+  // Get all transactions for a season (paginated)
+  fastify.get(
+    "/transactions/season/:seasonId",
+    async (request, reply) => {
+      const { seasonId } = request.params;
+      const { limit, offset, order } = request.query;
+
+      try {
+        const result = await raffleTransactionService.getSeasonTransactions(
+          parseInt(seasonId),
+          {
+            limit: limit ? parseInt(limit) : undefined,
+            offset: offset ? parseInt(offset) : undefined,
+            order,
+          }
+        );
+
+        return result;
+      } catch (error) {
+        fastify.log.error("Failed to fetch season transactions:", error);
+        return reply.code(500).send({ error: error.message });
+      }
+    }
+  );
+
   // Get user's transaction history for a season
   fastify.get(
     "/transactions/:userAddress/:seasonId",
@@ -56,6 +81,63 @@ export default async function raffleTransactionRoutes(fastify) {
       return { positions };
     } catch (error) {
       fastify.log.error("Failed to fetch all positions:", error);
+      return reply.code(500).send({ error: error.message });
+    }
+  });
+
+  // Admin: Check partition status and create missing partitions
+  fastify.get("/admin/diagnostics", async (request, reply) => {
+    try {
+      const { db } = await import("../../shared/supabaseClient.js");
+
+      // Check if table exists
+      const { data: tableCheck, error: tableError } = await db.client
+        .from("raffle_transactions")
+        .select("id", { count: "exact", head: true });
+
+      // Check which partitions exist
+      const { data: partitions, error: partError } = await db.client.rpc(
+        "get_partition_info"
+      ).catch(() => ({ data: null, error: { message: "RPC function not available" } }));
+
+      // Get active seasons
+      const { data: seasons } = await db.client
+        .from("season_contracts")
+        .select("season_id")
+        .eq("is_active", true);
+
+      // Try creating partitions for active seasons
+      const partitionResults = [];
+      for (const s of seasons || []) {
+        try {
+          const { error } = await db.client.rpc("create_raffle_tx_partition", {
+            season_num: s.season_id,
+          });
+          partitionResults.push({
+            seasonId: s.season_id,
+            success: !error,
+            error: error?.message || null,
+          });
+        } catch (err) {
+          partitionResults.push({
+            seasonId: s.season_id,
+            success: false,
+            error: err.message,
+          });
+        }
+      }
+
+      return {
+        tableExists: !tableError,
+        tableError: tableError?.message || null,
+        rowCount: tableCheck?.length ?? 0,
+        partitionRpcAvailable: !partError,
+        partitionError: partError?.message || null,
+        partitions: partitions || "unavailable",
+        activeSeasons: seasons?.map((s) => s.season_id) || [],
+        partitionCreation: partitionResults,
+      };
+    } catch (error) {
       return reply.code(500).send({ error: error.message });
     }
   });
