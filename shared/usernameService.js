@@ -163,6 +163,66 @@ class UsernameService {
   }
 
   /**
+   * Sync a Farcaster username to a wallet address in Redis.
+   * Only sets the username if the wallet does not already have one.
+   * Sanitizes Farcaster username (hyphens → underscores) and validates against SoF rules.
+   * @param {string} walletAddress - Wallet address
+   * @param {string} farcasterUsername - Farcaster username to sync
+   * @returns {Promise<{synced: boolean, reason?: string}>}
+   */
+  async syncFarcasterUsername(walletAddress, farcasterUsername) {
+    try {
+      if (!walletAddress || !farcasterUsername) {
+        return { synced: false, reason: 'MISSING_PARAMS' };
+      }
+
+      // Check if wallet already has a username — don't overwrite user's choice
+      const existing = await this.getUsernameByAddress(walletAddress);
+      if (existing) {
+        this.getLogger().info(
+          `[UsernameService] Wallet ${walletAddress} already has username "${existing}", skipping sync`
+        );
+        return { synced: false, reason: 'ALREADY_HAS_USERNAME' };
+      }
+
+      // Sanitize: replace hyphens with underscores
+      const sanitized = farcasterUsername.replace(/-/g, '_');
+
+      // Validate against SoF rules
+      const validation = this.validateUsername(sanitized);
+      if (!validation.valid) {
+        this.getLogger().info(
+          `[UsernameService] Farcaster username "${farcasterUsername}" → "${sanitized}" invalid: ${validation.error}`
+        );
+        return { synced: false, reason: validation.error };
+      }
+
+      // Check availability
+      const available = await this.isUsernameAvailable(sanitized);
+      if (!available) {
+        this.getLogger().info(
+          `[UsernameService] Sanitized username "${sanitized}" already taken, skipping sync`
+        );
+        return { synced: false, reason: 'USERNAME_TAKEN' };
+      }
+
+      // Set the username
+      const result = await this.setUsername(walletAddress, sanitized);
+      if (result.success) {
+        this.getLogger().info(
+          `[UsernameService] Synced Farcaster username "${sanitized}" for ${walletAddress}`
+        );
+        return { synced: true };
+      }
+
+      return { synced: false, reason: result.error };
+    } catch (error) {
+      this.getLogger().error({ err: error }, '[UsernameService] Error syncing Farcaster username');
+      return { synced: false, reason: 'INTERNAL_ERROR' };
+    }
+  }
+
+  /**
    * Get batch usernames for multiple addresses
    * @param {string[]} addresses - Array of wallet addresses
    * @returns {Promise<Map<string, string|null>>} Map of address -> username
