@@ -30,6 +30,25 @@ export default async function raffleTransactionRoutes(fastify) {
     }
   );
 
+  // Get aggregated holders for a season
+  fastify.get(
+    "/holders/season/:seasonId",
+    async (request, reply) => {
+      const { seasonId } = request.params;
+
+      try {
+        const result = await raffleTransactionService.getSeasonHolders(
+          parseInt(seasonId),
+        );
+
+        return result;
+      } catch (error) {
+        fastify.log.error("Failed to fetch season holders:", error);
+        return reply.code(500).send({ error: error.message });
+      }
+    }
+  );
+
   // Get user's transaction history for a season
   fastify.get(
     "/transactions/:userAddress/:seasonId",

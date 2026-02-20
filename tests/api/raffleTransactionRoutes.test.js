@@ -138,3 +138,155 @@ describe("GET /transactions/season/:seasonId", () => {
     expect(body.error).toBe("DB connection failed");
   });
 });
+
+describe("GET /holders/season/:seasonId", () => {
+  it("should return aggregated holders (latest tx per user wins)", async () => {
+    // Multiple rows for the same user — latest (highest block_number) should win
+    const mockRows = [
+      {
+        user_address: "0xAlice",
+        tickets_after: 50,
+        block_number: 200,
+        block_timestamp: "2024-01-16T10:00:00.000Z",
+        id: 3,
+      },
+      {
+        user_address: "0xAlice",
+        tickets_after: 30,
+        block_number: 100,
+        block_timestamp: "2024-01-15T10:00:00.000Z",
+        id: 1,
+      },
+      {
+        user_address: "0xBob",
+        tickets_after: 20,
+        block_number: 150,
+        block_timestamp: "2024-01-15T12:00:00.000Z",
+        id: 2,
+      },
+    ];
+
+    mockFrom.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          order: vi.fn().mockReturnValue({
+            order: vi.fn().mockResolvedValue({
+              data: mockRows,
+              error: null,
+            }),
+          }),
+        }),
+      }),
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/holders/season/1",
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.payload);
+    expect(body.totalHolders).toBe(2);
+    expect(body.totalTickets).toBe(70); // 50 + 20
+    expect(body.holders).toHaveLength(2);
+    // Sorted by current_tickets DESC
+    expect(body.holders[0].user_address).toBe("0xAlice");
+    expect(body.holders[0].current_tickets).toBe(50);
+    expect(body.holders[0].transaction_count).toBe(2);
+    expect(body.holders[1].user_address).toBe("0xBob");
+    expect(body.holders[1].current_tickets).toBe(20);
+    expect(body.holders[1].transaction_count).toBe(1);
+  });
+
+  it("should filter out 0-ticket holders (sold everything)", async () => {
+    const mockRows = [
+      {
+        user_address: "0xAlice",
+        tickets_after: 0,
+        block_number: 200,
+        block_timestamp: "2024-01-16T10:00:00.000Z",
+        id: 2,
+      },
+      {
+        user_address: "0xBob",
+        tickets_after: 10,
+        block_number: 150,
+        block_timestamp: "2024-01-15T12:00:00.000Z",
+        id: 1,
+      },
+    ];
+
+    mockFrom.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          order: vi.fn().mockReturnValue({
+            order: vi.fn().mockResolvedValue({
+              data: mockRows,
+              error: null,
+            }),
+          }),
+        }),
+      }),
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/holders/season/1",
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.payload);
+    expect(body.totalHolders).toBe(1);
+    expect(body.holders[0].user_address).toBe("0xBob");
+  });
+
+  it("should return empty for season with no transactions", async () => {
+    mockFrom.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          order: vi.fn().mockReturnValue({
+            order: vi.fn().mockResolvedValue({
+              data: [],
+              error: null,
+            }),
+          }),
+        }),
+      }),
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/holders/season/99",
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.payload);
+    expect(body.holders).toEqual([]);
+    expect(body.totalHolders).toBe(0);
+    expect(body.totalTickets).toBe(0);
+  });
+
+  it("should return 500 on database error", async () => {
+    mockFrom.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          order: vi.fn().mockReturnValue({
+            order: vi.fn().mockResolvedValue({
+              data: null,
+              error: { message: "DB connection failed" },
+            }),
+          }),
+        }),
+      }),
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/holders/season/1",
+    });
+
+    expect(res.statusCode).toBe(500);
+    const body = JSON.parse(res.payload);
+    expect(body.error).toBe("DB connection failed");
+  });
+});

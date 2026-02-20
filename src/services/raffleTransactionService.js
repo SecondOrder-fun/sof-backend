@@ -272,6 +272,71 @@ class RaffleTransactionService {
   }
 
   /**
+   * Get current holders for a season by aggregating raffle_transactions.
+   * Uses tickets_after from each user's latest transaction as their current position.
+   */
+  async getSeasonHolders(seasonId) {
+    const { data, error } = await db.client
+      .from("raffle_transactions")
+      .select(
+        "user_address, tickets_after, block_number, block_timestamp, id",
+      )
+      .eq("season_id", seasonId)
+      .order("block_number", { ascending: false })
+      .order("id", { ascending: false });
+
+    if (error) throw error;
+    if (!data || data.length === 0) {
+      return { holders: [], totalHolders: 0, totalTickets: 0 };
+    }
+
+    // Group by user_address, keep only the latest row per user
+    const latestByUser = new Map();
+    const txCountByUser = new Map();
+
+    for (const row of data) {
+      const addr = row.user_address;
+      txCountByUser.set(addr, (txCountByUser.get(addr) || 0) + 1);
+      if (!latestByUser.has(addr)) {
+        latestByUser.set(addr, row);
+      }
+    }
+
+    // Build holder list, filtering out 0-ticket holders
+    const holders = [];
+    for (const [addr, row] of latestByUser) {
+      const currentTickets = row.tickets_after ?? 0;
+      if (currentTickets === 0) continue;
+      holders.push({
+        user_address: addr,
+        current_tickets: currentTickets,
+        last_block_number: row.block_number,
+        last_block_timestamp: row.block_timestamp,
+        transaction_count: txCountByUser.get(addr),
+      });
+    }
+
+    // Sort by current_tickets DESC, then earliest block_number for tiebreaking
+    holders.sort((a, b) => {
+      if (b.current_tickets !== a.current_tickets) {
+        return b.current_tickets - a.current_tickets;
+      }
+      return a.last_block_number - b.last_block_number;
+    });
+
+    const totalTickets = holders.reduce(
+      (sum, h) => sum + h.current_tickets,
+      0,
+    );
+
+    return {
+      holders,
+      totalHolders: holders.length,
+      totalTickets,
+    };
+  }
+
+  /**
    * Get all transactions for a season (paginated)
    */
   async getSeasonTransactions(seasonId, options = {}) {
