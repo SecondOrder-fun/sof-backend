@@ -96,9 +96,15 @@ export default async function raffleTransactionRoutes(fastify) {
         .select("id", { count: "exact", head: true });
 
       // Check which partitions exist
-      const { data: partitions, error: partError } = await db.client.rpc(
-        "get_partition_info"
-      ).catch(() => ({ data: null, error: { message: "RPC function not available" } }));
+      let partitions = null;
+      let partError = null;
+      try {
+        const result = await db.client.rpc("get_partition_info");
+        partitions = result.data;
+        partError = result.error;
+      } catch {
+        partError = { message: "RPC function not available" };
+      }
 
       // Get active seasons
       const { data: seasons } = await db.client
