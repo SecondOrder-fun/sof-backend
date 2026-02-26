@@ -1,11 +1,16 @@
 /**
  * @file seasonLifecycleService.js
  * @description Automated season lifecycle management - starts and ends seasons on schedule
- * 
+ *
  * Checks every 5 minutes for:
  * - Seasons where startTime has passed but status is NotStarted → calls startSeason()
  * - Seasons where endTime has passed but status is Active → calls requestSeasonEnd()
- * 
+ *
+ * Resilience features:
+ * - Retry with exponential backoff (3 attempts, 5s/15s/45s)
+ * - Transaction receipt confirmation (waits for 1 on-chain confirmation)
+ * - In-memory dedup prevents duplicate submissions for the same season
+ *
  * @author SecondOrder.fun
  */
 
@@ -35,6 +40,11 @@ const STATUS_NAMES = [
 // Default check interval: 5 minutes
 const DEFAULT_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
+// Retry configuration
+const MAX_RETRIES = 3;
+const RETRY_DELAYS_MS = [5_000, 15_000, 45_000];
+const TX_RECEIPT_TIMEOUT_MS = 60_000;
+
 /**
  * SeasonLifecycleService - Manages automatic season starts and ends
  */
@@ -44,6 +54,8 @@ export class SeasonLifecycleService {
     this.raffleAddress = null;
     this.intervalId = null;
     this.isRunning = false;
+    // Track in-flight transactions to prevent duplicate submissions
+    this.pendingSeasons = new Set();
   }
 
   /**
@@ -135,7 +147,7 @@ export class SeasonLifecycleService {
 
   /**
    * Process a single season if it needs a state transition
-   * @param {bigint} seasonId 
+   * @param {bigint} seasonId
    * @param {bigint} now - Current timestamp
    */
   async processSeasonIfNeeded(seasonId, now) {
@@ -180,76 +192,139 @@ export class SeasonLifecycleService {
   }
 
   /**
+   * Submit a contract write with retry and tx confirmation.
+   * @param {string} functionName - Contract function to call
+   * @param {Array} args - Function arguments
+   * @param {string} label - Human-readable label for logging
+   * @returns {{ hash: string, receipt: object }} - Transaction hash and receipt
+   */
+  async submitWithRetry(functionName, args, label) {
+    let lastError;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const walletClient = getWalletClient();
+
+        const hash = await walletClient.writeContract({
+          address: this.raffleAddress,
+          abi: RaffleAbi,
+          functionName,
+          args,
+        });
+
+        this.logger.info(`${label} TX submitted (attempt ${attempt}): ${hash}`);
+
+        // Wait for on-chain confirmation
+        const receipt = await publicClient.waitForTransactionReceipt({
+          hash,
+          confirmations: 1,
+          timeout: TX_RECEIPT_TIMEOUT_MS,
+        });
+
+        if (receipt.status === "reverted") {
+          throw new Error(`Transaction reverted on-chain (hash: ${hash})`);
+        }
+
+        this.logger.info(`${label} TX confirmed: ${hash} (block ${receipt.blockNumber})`);
+        return { hash, receipt };
+      } catch (error) {
+        lastError = error;
+        this.logger.warn(
+          `${label} attempt ${attempt}/${MAX_RETRIES} failed: ${error.message}`
+        );
+
+        if (attempt < MAX_RETRIES) {
+          const delayMs = RETRY_DELAYS_MS[attempt - 1];
+          this.logger.info(`${label} retrying in ${delayMs / 1000}s...`);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+    }
+
+    throw lastError;
+  }
+
+  /**
    * Call startSeason on the contract
-   * @param {bigint} seasonId 
-   * @param {string} seasonName 
+   * @param {bigint} seasonId
+   * @param {string} seasonName
    */
   async startSeason(seasonId, seasonName) {
+    const dedupKey = `start-${seasonId}`;
+    if (this.pendingSeasons.has(dedupKey)) {
+      this.logger.info(`⏳ Season ${seasonId} start already in progress, skipping`);
+      return;
+    }
+
+    this.pendingSeasons.add(dedupKey);
     this.logger.info(`🎬 Starting season ${seasonId} "${seasonName}"...`);
 
     try {
-      const walletClient = getWalletClient();
+      const { hash } = await this.submitWithRetry(
+        "startSeason",
+        [seasonId],
+        `🎬 Season ${seasonId} start`
+      );
 
-      const hash = await walletClient.writeContract({
-        address: this.raffleAddress,
-        abi: RaffleAbi,
-        functionName: "startSeason",
-        args: [seasonId],
-      });
+      this.logger.info(`✅ Season ${seasonId} started and confirmed! TX: ${hash}`);
 
-      this.logger.info(`✅ Season ${seasonId} started! TX: ${hash}`);
-
-      // Send Telegram alert
       await this.sendAlert(
         `🎬 Season ${seasonId} "${seasonName}" has been automatically started!\n\nTX: ${hash}`
       );
     } catch (error) {
-      this.logger.error(`❌ Failed to start season ${seasonId}: ${error.message}`);
-      
+      this.logger.error(`❌ Failed to start season ${seasonId} after ${MAX_RETRIES} attempts: ${error.message}`);
+
       await this.sendAlert(
-        `❌ Failed to auto-start season ${seasonId} "${seasonName}"\n\nError: ${error.message}`
+        `❌ Failed to auto-start season ${seasonId} "${seasonName}" after ${MAX_RETRIES} attempts\n\nError: ${error.message}`
       );
+    } finally {
+      this.pendingSeasons.delete(dedupKey);
     }
   }
 
   /**
    * Call requestSeasonEnd on the contract
-   * @param {bigint} seasonId 
-   * @param {string} seasonName 
+   * @param {bigint} seasonId
+   * @param {string} seasonName
    */
   async requestSeasonEnd(seasonId, seasonName) {
+    const dedupKey = `end-${seasonId}`;
+    if (this.pendingSeasons.has(dedupKey)) {
+      this.logger.info(`⏳ Season ${seasonId} end request already in progress, skipping`);
+      return;
+    }
+
+    this.pendingSeasons.add(dedupKey);
     this.logger.info(`🏁 Requesting end for season ${seasonId} "${seasonName}"...`);
 
     try {
-      const walletClient = getWalletClient();
+      const { hash } = await this.submitWithRetry(
+        "requestSeasonEnd",
+        [seasonId],
+        `🏁 Season ${seasonId} end`
+      );
 
-      const hash = await walletClient.writeContract({
-        address: this.raffleAddress,
-        abi: RaffleAbi,
-        functionName: "requestSeasonEnd",
-        args: [seasonId],
-      });
+      this.logger.info(`✅ Season ${seasonId} end requested and confirmed! TX: ${hash}`);
 
-      this.logger.info(`✅ Season ${seasonId} end requested! TX: ${hash}`);
-
-      // Send Telegram alert
       await this.sendAlert(
         `🏁 Season ${seasonId} "${seasonName}" end requested! VRF pending for winner selection.\n\nTX: ${hash}`
       );
     } catch (error) {
       this.logger.error(
-        `❌ Failed to request end for season ${seasonId}: ${error.message}`
+        `❌ Failed to request end for season ${seasonId} after ${MAX_RETRIES} attempts: ${error.message}`
       );
 
       await this.sendAlert(
-        `❌ Failed to auto-end season ${seasonId} "${seasonName}"\n\nError: ${error.message}`
+        `❌ Failed to auto-end season ${seasonId} "${seasonName}" after ${MAX_RETRIES} attempts\n\nError: ${error.message}`
       );
+    } finally {
+      this.pendingSeasons.delete(dedupKey);
     }
   }
 
   /**
    * Send alert via adminAlertService if available
-   * @param {string} message 
+   * @param {string} message
    */
   async sendAlert(message) {
     try {
@@ -267,7 +342,7 @@ let seasonLifecycleService = null;
 
 /**
  * Get or create the SeasonLifecycleService instance
- * @param {object} logger 
+ * @param {object} logger
  * @returns {SeasonLifecycleService}
  */
 export function getSeasonLifecycleService(logger) {
