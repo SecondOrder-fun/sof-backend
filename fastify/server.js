@@ -232,6 +232,15 @@ try {
   app.log.error({ err }, "Failed to mount /api/seasons");
 }
 
+try {
+  await app.register((await import("./routes/gatingRoutes.js")).default, {
+    prefix: "/api/gating",
+  });
+  app.log.info("Mounted /api/gating");
+} catch (err) {
+  app.log.error({ err }, "Failed to mount /api/gating");
+}
+
 // Debug: print all mounted routes
 // app.ready(() => {
 //   try {
