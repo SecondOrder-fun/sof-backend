@@ -250,6 +250,15 @@ try {
   app.log.error({ err }, "Failed to mount /api/airdrop");
 }
 
+try {
+  await app.register((await import("./routes/paymasterProxyRoutes.js")).default, {
+    prefix: "/api/paymaster",
+  });
+  app.log.info("Mounted /api/paymaster");
+} catch (err) {
+  app.log.error({ err }, "Failed to mount /api/paymaster");
+}
+
 // Debug: print all mounted routes
 // app.ready(() => {
 //   try {
