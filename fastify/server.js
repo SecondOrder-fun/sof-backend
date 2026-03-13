@@ -241,6 +241,15 @@ try {
   app.log.error({ err }, "Failed to mount /api/gating");
 }
 
+try {
+  await app.register((await import("./routes/airdropRoutes.js")).default, {
+    prefix: "/api/airdrop",
+  });
+  app.log.info("Mounted /api/airdrop");
+} catch (err) {
+  app.log.error({ err }, "Failed to mount /api/airdrop");
+}
+
 // Debug: print all mounted routes
 // app.ready(() => {
 //   try {
