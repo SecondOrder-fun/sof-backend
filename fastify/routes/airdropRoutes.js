@@ -59,20 +59,16 @@ export default async function airdropRoutes(fastify) {
    * Returns an EIP-712 signature that the user submits on-chain to claim their airdrop.
    */
   fastify.post("/attestation", async (request, reply) => {
-    // ── Auth gate ──────────────────────────────────────────────────────
+    // ── Resolve identity ────────────────────────────────────────────────
+    // Priority: JWT user > request body (MiniApp context sends fid + address directly)
     const user = request.user;
-
-    if (!user) {
-      return reply.code(401).send({ error: "Authentication required" });
-    }
-
-    const wallet = user.wallet_address;
-    const fid = user.fid;
+    const wallet = user?.wallet_address || request.body?.address;
+    const fid = user?.fid || request.body?.fid;
 
     if (!wallet) {
       return reply.code(400).send({
         error:
-          "No wallet address associated with your account. " +
+          "No wallet address provided. " +
           "Please sign in with a wallet-linked Farcaster account.",
       });
     }
@@ -80,8 +76,8 @@ export default async function airdropRoutes(fastify) {
     if (!fid) {
       return reply.code(400).send({
         error:
-          "No Farcaster FID associated with your account. " +
-          "Please sign in via Farcaster (SIWF) to claim the airdrop.",
+          "No Farcaster FID provided. " +
+          "Please sign in via Farcaster to claim the airdrop.",
       });
     }
 
