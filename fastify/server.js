@@ -521,12 +521,14 @@ async function syncHistoricalPositions() {
     const result = await infoFiPositionService.syncAllActiveMarkets();
 
     if (result.success) {
-      app.log.info(
-        `✅ Historical sync complete: ${result.totalRecorded} new positions recorded, ` +
-          `${result.totalSkipped} already synced, ${
-            result.totalErrors || 0
-          } errors`,
-      );
+      if (result.message) {
+        app.log.info(`✅ Historical sync: ${result.message}`);
+      } else {
+        app.log.info(
+          `✅ Historical sync complete: ${result.totalRecorded ?? 0} new positions recorded, ` +
+            `${result.totalSkipped ?? 0} already synced, ${result.totalErrors ?? 0} errors`,
+        );
+      }
 
       if (result.details && result.details.length > 0) {
         app.log.debug({ markets: result.details }, "Sync details by market");

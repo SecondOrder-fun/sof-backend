@@ -109,9 +109,8 @@ export async function authenticateFastify(app) {
     try {
       const user = await AuthService.authenticateRequest(request);
       request.user = user;
-    } catch (error) {
+    } catch {
       // Allow unauthenticated requests for public endpoints
-      app.log.error("Authentication error:", error);
     }
   });
 }
