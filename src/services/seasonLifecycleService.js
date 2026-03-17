@@ -328,8 +328,8 @@ export class SeasonLifecycleService {
    */
   async sendAlert(message) {
     try {
-      if (adminAlertService && typeof adminAlertService.sendAlert === "function") {
-        await adminAlertService.sendAlert(message);
+      if (adminAlertService && typeof adminAlertService.sendGenericAlert === "function") {
+        await adminAlertService.sendGenericAlert(message, this.logger);
       }
     } catch (error) {
       this.logger.warn(`Failed to send alert: ${error.message}`);

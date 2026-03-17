@@ -168,6 +168,21 @@ export class AdminAlertService {
   }
 
   /**
+   * Send a generic alert message (not tied to a specific FPMM/oracle failure)
+   * @param {string} message - Alert message
+   * @param {object} [logger] - Optional logger instance
+   */
+  async sendGenericAlert(message, logger) {
+    try {
+      const safeLogger = logger || { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+      safeLogger.info(`🚨 ALERT: ${message}`);
+      // TODO: Send to actual alert channels (Slack, Discord, etc.)
+    } catch (alertError) {
+      // Silently ignore — alerting should never crash the caller
+    }
+  }
+
+  /**
    * Get current failure count for a FPMM address
    * @param {string} fpmmAddress - SimpleFPMM contract address
    * @returns {number} Current failure count

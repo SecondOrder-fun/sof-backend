@@ -1,12 +1,14 @@
 /**
- * Airdrop Attestation Routes
+ * Airdrop Routes
  *
  * POST /api/airdrop/attestation — generate an EIP-712 FarcasterAttestation signature
- *   for the authenticated user so they can claim their SOF airdrop on-chain.
+ * POST /api/airdrop/claim — relay an airdrop claim via backend wallet (gasless for user)
  */
 
 import process from "node:process";
 import { privateKeyToAccount } from "viem/accounts";
+import { recoverMessageAddress } from "viem";
+import { getPaymasterService } from "../../src/services/paymasterService.js";
 
 // EIP-712 domain and type constants
 const DOMAIN_NAME = "SecondOrder.fun SOFAirdrop";
@@ -139,4 +141,196 @@ export default async function airdropRoutes(fastify) {
       s,
     });
   });
+
+  /**
+   * POST /api/airdrop/claim
+   *
+   * Relay airdrop claims via backend wallet (gasless for users).
+   *
+   * Request body:
+   *   { address: string, type: "initial"|"basic"|"daily", fid?: number, signature?: string }
+   *
+   * Auth strategy:
+   *   - "initial": JWT with fid (Farcaster user)
+   *   - "basic": personal_sign signature proving wallet ownership (no JWT needed)
+   *   - "daily": JWT with wallet_address matching address
+   */
+  fastify.post(
+    "/claim",
+    {
+      config: {
+        rateLimit: {
+          max: 5,
+          timeWindow: "1 minute",
+        },
+      },
+    },
+    async (request, reply) => {
+      const { address, type, fid, signature } = request.body || {};
+
+      if (!address || typeof address !== "string") {
+        return reply.code(400).send({ error: "Missing address" });
+      }
+
+      if (!["initial", "basic", "daily"].includes(type)) {
+        return reply
+          .code(400)
+          .send({ error: 'Invalid type. Must be "initial", "basic", or "daily"' });
+      }
+
+      const airdropAddress = process.env.SOF_AIRDROP_ADDRESS_TESTNET;
+      if (!airdropAddress) {
+        return reply
+          .code(503)
+          .send({ error: "Airdrop contract not configured" });
+      }
+
+      // ── Auth: validate identity per type ──────────────────────────────
+
+      if (type === "initial") {
+        const user = request.user;
+        const userFid = user?.fid || fid;
+        if (!userFid) {
+          return reply
+            .code(401)
+            .send({ error: "Farcaster authentication required for initial claim" });
+        }
+
+        // Generate attestation internally (same logic as /attestation)
+        const verifyingContract = airdropAddress;
+        const deadline = BigInt(
+          Math.floor(Date.now() / 1000) + ATTESTATION_TTL_SECONDS,
+        );
+
+        const domain = {
+          name: DOMAIN_NAME,
+          version: DOMAIN_VERSION,
+          chainId: CHAIN_ID,
+          verifyingContract,
+        };
+
+        const message = {
+          wallet: address,
+          fid: BigInt(userFid),
+          deadline,
+        };
+
+        let attestSig;
+        try {
+          const account = getSignerAccount();
+          attestSig = await account.signTypedData({
+            domain,
+            types: EIP712_TYPES,
+            primaryType: "FarcasterAttestation",
+            message,
+          });
+        } catch (err) {
+          fastify.log.error({ err }, "Attestation signing failed");
+          return reply
+            .code(500)
+            .send({ error: "Failed to generate attestation" });
+        }
+
+        const r = `0x${attestSig.slice(2, 66)}`;
+        const s = `0x${attestSig.slice(66, 130)}`;
+        const v = parseInt(attestSig.slice(130, 132), 16);
+
+        const paymasterService = getPaymasterService(fastify.log);
+        if (!paymasterService.initialized) {
+          await paymasterService.initialize();
+        }
+
+        const result = await paymasterService.claimAirdrop(
+          {
+            functionName: "claimInitialFor",
+            args: [address, BigInt(userFid), deadline, v, r, s],
+            airdropAddress,
+          },
+          fastify.log,
+        );
+
+        if (!result.success) {
+          return reply.code(500).send({ error: result.error });
+        }
+
+        return reply.send({ success: true, hash: result.hash });
+      }
+
+      if (type === "basic") {
+        if (!signature) {
+          return reply
+            .code(400)
+            .send({ error: "Signature required for basic claim" });
+        }
+
+        // Verify wallet ownership via personal_sign
+        const expectedMessage = `Claim SOF airdrop for ${address}`;
+        let recoveredAddress;
+        try {
+          recoveredAddress = await recoverMessageAddress({
+            message: expectedMessage,
+            signature,
+          });
+        } catch (err) {
+          return reply.code(400).send({ error: "Invalid signature" });
+        }
+
+        if (recoveredAddress.toLowerCase() !== address.toLowerCase()) {
+          return reply.code(401).send({ error: "Signature does not match address" });
+        }
+
+        const paymasterService = getPaymasterService(fastify.log);
+        if (!paymasterService.initialized) {
+          await paymasterService.initialize();
+        }
+
+        const result = await paymasterService.claimAirdrop(
+          {
+            functionName: "claimInitialBasicFor",
+            args: [address],
+            airdropAddress,
+          },
+          fastify.log,
+        );
+
+        if (!result.success) {
+          return reply.code(500).send({ error: result.error });
+        }
+
+        return reply.send({ success: true, hash: result.hash });
+      }
+
+      if (type === "daily") {
+        const user = request.user;
+        if (
+          !user?.wallet_address ||
+          user.wallet_address.toLowerCase() !== address.toLowerCase()
+        ) {
+          return reply
+            .code(401)
+            .send({ error: "JWT wallet_address must match claim address" });
+        }
+
+        const paymasterService = getPaymasterService(fastify.log);
+        if (!paymasterService.initialized) {
+          await paymasterService.initialize();
+        }
+
+        const result = await paymasterService.claimAirdrop(
+          {
+            functionName: "claimDailyFor",
+            args: [address],
+            airdropAddress,
+          },
+          fastify.log,
+        );
+
+        if (!result.success) {
+          return reply.code(500).send({ error: result.error });
+        }
+
+        return reply.send({ success: true, hash: result.hash });
+      }
+    },
+  );
 }
