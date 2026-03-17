@@ -25,10 +25,10 @@ async function processSeasonStartedLog(
   const { seasonId } = log.args;
 
   try {
-    // Check if season already exists in database
-    const existing = await db.getSeasonContracts(Number(seasonId));
+    // Check if season already exists in database for this specific raffle contract
+    const existing = await db.getSeasonContracts(Number(seasonId), raffleAddress);
     if (existing) {
-      logger.debug(`Season ${seasonId} already exists in database, skipping`);
+      logger.debug(`Season ${seasonId} already exists in database for ${raffleAddress}, skipping`);
       return;
     }
 

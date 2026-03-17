@@ -468,7 +468,7 @@ export class DatabaseService {
           created_block: data.created_block || null,
         },
         {
-          onConflict: "season_id",
+          onConflict: "season_id,raffle_address",
         },
       )
       .select()
@@ -526,12 +526,17 @@ export class DatabaseService {
    * @param {number} seasonId - Season ID
    * @returns {Promise<Object|null>} Season contract record or null if not found
    */
-  async getSeasonContracts(seasonId) {
-    const { data, error } = await this.client
+  async getSeasonContracts(seasonId, raffleAddress) {
+    let query = this.client
       .from("season_contracts")
       .select("*")
-      .eq("season_id", seasonId)
-      .single();
+      .eq("season_id", seasonId);
+
+    if (raffleAddress) {
+      query = query.eq("raffle_address", raffleAddress);
+    }
+
+    const { data, error } = await query.single();
 
     if (error && error.code !== "PGRST116") {
       // PGRST116 = no rows found
