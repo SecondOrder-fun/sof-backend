@@ -7,6 +7,8 @@
 
 import process from "node:process";
 import { privateKeyToAccount } from "viem/accounts";
+import { recoverMessageAddress } from "viem";
+import { getPaymasterService } from "../../src/services/paymasterService.js";
 
 // EIP-712 domain and type constants
 const DOMAIN_NAME = "SecondOrder.fun SOFAirdrop";
