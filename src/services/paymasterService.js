@@ -250,6 +250,114 @@ export class PaymasterService {
   }
 
   /**
+   * Claim airdrop on behalf of a user via gasless relay transaction.
+   * Awaits receipt (frontend needs confirmation).
+   * @async
+   * @param {Object} params
+   * @param {string} params.functionName - "claimInitialFor"|"claimInitialBasicFor"|"claimDailyFor"
+   * @param {Array} params.args - Arguments for the function call
+   * @param {string} params.airdropAddress - SOFAirdrop contract address
+   * @param {Object} logger
+   * @returns {Promise<Object>} { success, hash } or { success: false, error }
+   */
+  async claimAirdrop(params, logger) {
+    if (!this.initialized) {
+      throw new Error(
+        "PaymasterService not initialized. Call initialize() first.",
+      );
+    }
+
+    const { functionName, args, airdropAddress } = params;
+
+    const AIRDROP_RELAY_ABI = [
+      {
+        name: "claimInitialFor",
+        type: "function",
+        stateMutability: "nonpayable",
+        inputs: [
+          { name: "user", type: "address" },
+          { name: "fid", type: "uint256" },
+          { name: "deadline", type: "uint256" },
+          { name: "v", type: "uint8" },
+          { name: "r", type: "bytes32" },
+          { name: "s", type: "bytes32" },
+        ],
+        outputs: [],
+      },
+      {
+        name: "claimInitialBasicFor",
+        type: "function",
+        stateMutability: "nonpayable",
+        inputs: [{ name: "user", type: "address" }],
+        outputs: [],
+      },
+      {
+        name: "claimDailyFor",
+        type: "function",
+        stateMutability: "nonpayable",
+        inputs: [{ name: "user", type: "address" }],
+        outputs: [],
+      },
+    ];
+
+    const maxRetries = 3;
+    const retryDelays = [3000, 10000, 30000];
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        logger.info(
+          `🔄 Attempt ${attempt}/${maxRetries}: Airdrop relay ${functionName} for ${args[0]}`,
+        );
+
+        const data = encodeFunctionData({
+          abi: AIRDROP_RELAY_ABI,
+          functionName,
+          args,
+        });
+
+        const hash = await this.walletClient.sendTransaction({
+          to: airdropAddress,
+          data,
+          value: 0n,
+          gas: 200000n,
+        });
+
+        logger.info(`✅ Airdrop relay tx submitted: ${hash}`);
+
+        // Await receipt — frontend needs confirmation
+        const receipt = await publicClient.waitForTransactionReceipt({
+          hash,
+          timeout: 60000,
+        });
+
+        if (receipt.status === "success") {
+          logger.info(`✅ Airdrop relay confirmed: ${hash}`);
+          return { success: true, hash };
+        } else {
+          throw new Error(`Transaction reverted: ${hash}`);
+        }
+      } catch (error) {
+        logger.error(`❌ Attempt ${attempt} failed: ${error.message}`);
+
+        if (attempt < maxRetries) {
+          const delayMs = retryDelays[attempt - 1];
+          logger.info(`⏳ Retrying in ${delayMs / 1000}s...`);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        } else {
+          logger.error(
+            `❌ Airdrop relay failed after ${maxRetries} attempts`,
+          );
+          return {
+            success: false,
+            error: error.message,
+            attempts: attempt,
+          };
+        }
+      }
+    }
+  }
+
+  /**
    * Get the backend wallet address
    * @returns {string} Wallet address
    */
