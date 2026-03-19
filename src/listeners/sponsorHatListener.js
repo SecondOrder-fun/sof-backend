@@ -6,7 +6,7 @@
  * - HATS_STAKING_ELIGIBILITY: StakingEligibility contract address
  * - HATS_PROTOCOL: Hats Protocol contract address
  * - HATS_SPONSOR_HAT_ID: The Sponsor hat ID (uint256)
- * - BACKEND_PRIVATE_KEY: Private key for minting (must wear Top Hat)
+ * - BACKEND_WALLET_PRIVATE_KEY: Private key for minting (must wear Top Hat)
  * - RPC_URL_TESTNET: Base Sepolia RPC URL
  */
 
@@ -30,7 +30,7 @@ export async function startSponsorHatListener() {
   const stakingAddress = process.env.HATS_STAKING_ELIGIBILITY;
   const hatsAddress = process.env.HATS_PROTOCOL;
   const sponsorHatId = process.env.HATS_SPONSOR_HAT_ID;
-  const privateKey = process.env.BACKEND_PRIVATE_KEY;
+  const privateKey = process.env.BACKEND_WALLET_PRIVATE_KEY;
   const rpcUrl = process.env.RPC_URL_TESTNET;
 
   if (!stakingAddress || !hatsAddress || !sponsorHatId) {
@@ -39,7 +39,7 @@ export async function startSponsorHatListener() {
   }
 
   if (!privateKey) {
-    console.log('[SponsorHat] No BACKEND_PRIVATE_KEY, skipping auto-mint');
+    console.log('[SponsorHat] No BACKEND_WALLET_PRIVATE_KEY, skipping auto-mint');
     return;
   }
 
