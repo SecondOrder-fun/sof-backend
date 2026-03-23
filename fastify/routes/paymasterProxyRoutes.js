@@ -1,8 +1,9 @@
 /**
  * @file paymasterProxyRoutes.js
  * @description Paymaster routes:
- *   POST /      — Proxies ERC-7677 paymaster requests to Coinbase CDP.
- *   POST /session — Issues a short-lived session token for Pimlico-sponsored txs.
+ *   POST /coinbase — Proxies ERC-7677 paymaster requests to Coinbase CDP.
+ *   POST /         — Backward-compatible alias for POST /coinbase.
+ *   POST /session  — Issues a short-lived session token for Pimlico-sponsored txs.
  */
 
 import crypto from "node:crypto";
@@ -17,43 +18,58 @@ export default async function paymasterProxyRoutes(fastify) {
     ? process.env.PAYMASTER_RPC_URL_TESTNET
     : process.env.PAYMASTER_RPC_URL;
 
-  // ─── POST / — Coinbase CDP proxy ─────────────────────────────────────────
+  // ─── Coinbase CDP proxy handler ───────────────────────────────────────────
 
-  fastify.post("/", {
+  const coinbaseHandler = async (request, reply) => {
+    if (!paymasterUrl) {
+      return reply.status(503).send({
+        error: "Coinbase paymaster not configured",
+      });
+    }
+
+    // Optional: require auth for sponsorship
+    // if (!request.user) {
+    //   return reply.status(401).send({ error: "Authentication required" });
+    // }
+
+    try {
+      const response = await fetch(paymasterUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request.body),
+      });
+
+      const data = await response.json();
+      return reply.status(response.status).send(data);
+    } catch (err) {
+      fastify.log.error({ err }, "Paymaster proxy request failed");
+      return reply.status(502).send({
+        error: "Paymaster request failed",
+      });
+    }
+  };
+
+  const coinbaseRateLimit = {
     config: {
       rateLimit: {
         max: 30,
         timeWindow: "1 minute",
       },
     },
-    handler: async (request, reply) => {
-      if (!paymasterUrl) {
-        return reply.status(503).send({
-          error: "Paymaster not configured",
-        });
-      }
+  };
 
-      // Optional: require auth for sponsorship
-      // if (!request.user) {
-      //   return reply.status(401).send({ error: "Authentication required" });
-      // }
+  // ─── POST /coinbase — Coinbase CDP proxy ──────────────────────────────────
 
-      try {
-        const response = await fetch(paymasterUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(request.body),
-        });
+  fastify.post("/coinbase", {
+    ...coinbaseRateLimit,
+    handler: coinbaseHandler,
+  });
 
-        const data = await response.json();
-        return reply.status(response.status).send(data);
-      } catch (err) {
-        fastify.log.error({ err }, "Paymaster proxy request failed");
-        return reply.status(502).send({
-          error: "Paymaster request failed",
-        });
-      }
-    },
+  // ─── POST / — Backward-compatible alias ───────────────────────────────────
+
+  fastify.post("/", {
+    ...coinbaseRateLimit,
+    handler: coinbaseHandler,
   });
 
   // ─── POST /session — Issue Pimlico session token ─────────────────────────

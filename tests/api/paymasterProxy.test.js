@@ -3,6 +3,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import fastify from "fastify";
 
+// Set env vars before the route module is imported so paymasterUrl closure is populated
+process.env.PAYMASTER_RPC_URL = "https://mock-paymaster.example.com/rpc";
+
 const mockRedisClient = {
   set: vi.fn().mockResolvedValue("OK"),
   get: vi.fn().mockResolvedValue(null),
@@ -41,6 +44,45 @@ beforeEach(() => {
   // Restore default mock behaviour after clearAllMocks
   AuthService.authenticateRequest.mockResolvedValue({ id: "user1", fid: 13837 });
   mockRedisClient.set.mockResolvedValue("OK");
+});
+
+describe("POST /api/paymaster/coinbase", () => {
+  it("forwards request body to upstream and returns response", async () => {
+    // Mock fetch to return a paymaster response
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      status: 200,
+      json: async () => ({ result: "0x123" }),
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/coinbase",
+      payload: { method: "pm_getPaymasterStubData", params: [] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ result: "0x123" });
+    vi.restoreAllMocks();
+  });
+});
+
+describe("POST /api/paymaster (backward compat)", () => {
+  it("proxies to Coinbase handler", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      status: 200,
+      json: async () => ({ result: "compat" }),
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/",
+      payload: { method: "pm_getPaymasterStubData" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ result: "compat" });
+    vi.restoreAllMocks();
+  });
 });
 
 describe("POST /session", () => {
