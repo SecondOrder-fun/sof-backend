@@ -5,6 +5,9 @@ import fastify from "fastify";
 
 // Set env vars before the route module is imported so paymasterUrl closure is populated
 process.env.PAYMASTER_RPC_URL = "https://mock-paymaster.example.com/rpc";
+process.env.PAYMASTER_RPC_URL_TESTNET = "https://mock-paymaster.example.com/rpc";
+process.env.PIMLICO_API_KEY_TESTNET = "test-pimlico-key";
+process.env.DEFAULT_NETWORK = "TESTNET";
 
 const mockRedisClient = {
   set: vi.fn().mockResolvedValue("OK"),
@@ -131,5 +134,43 @@ describe("POST /session", () => {
     expect(value).toBe("1");
     expect(exFlag).toBe("EX");
     expect(ttl).toBe(300);
+  });
+});
+
+describe("POST /api/paymaster/pimlico", () => {
+  it("returns 401 when session param is missing", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/pimlico",
+      payload: { method: "pm_getPaymasterStubData" },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("returns 401 when session token is invalid/expired", async () => {
+    mockRedisClient.get.mockResolvedValueOnce(null);
+    const res = await app.inject({
+      method: "POST",
+      url: "/pimlico?session=invalid",
+      payload: { method: "pm_getPaymasterStubData" },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("forwards to Pimlico when session is valid", async () => {
+    mockRedisClient.get.mockResolvedValueOnce("1");
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      status: 200,
+      json: async () => ({ result: "pimlico-ok" }),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/pimlico?session=valid-token",
+      payload: { method: "pm_getPaymasterStubData", params: [] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ result: "pimlico-ok" });
+    expect(mockRedisClient.get).toHaveBeenCalledWith("paymaster:session:valid-token");
+    vi.restoreAllMocks();
   });
 });
