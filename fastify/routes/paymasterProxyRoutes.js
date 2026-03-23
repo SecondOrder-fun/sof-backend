@@ -1,9 +1,13 @@
 /**
  * @file paymasterProxyRoutes.js
- * @description Proxies ERC-7677 paymaster requests to Coinbase CDP.
- *   Avoids exposing CDP API key to the frontend.
- *   Called by useSmartTransactions when wallet supports paymasterService.
+ * @description Paymaster routes:
+ *   POST /      — Proxies ERC-7677 paymaster requests to Coinbase CDP.
+ *   POST /session — Issues a short-lived session token for Pimlico-sponsored txs.
  */
+
+import crypto from "node:crypto";
+import { redisClient } from "../../shared/redisClient.js";
+import { AuthService } from "../../shared/auth.js";
 
 export default async function paymasterProxyRoutes(fastify) {
   const isTestnet =
@@ -12,6 +16,8 @@ export default async function paymasterProxyRoutes(fastify) {
   const paymasterUrl = isTestnet
     ? process.env.PAYMASTER_RPC_URL_TESTNET
     : process.env.PAYMASTER_RPC_URL;
+
+  // ─── POST / — Coinbase CDP proxy ─────────────────────────────────────────
 
   fastify.post("/", {
     config: {
@@ -47,6 +53,32 @@ export default async function paymasterProxyRoutes(fastify) {
           error: "Paymaster request failed",
         });
       }
+    },
+  });
+
+  // ─── POST /session — Issue Pimlico session token ─────────────────────────
+
+  fastify.post("/session", {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: "1 minute",
+      },
+    },
+    handler: async (request, reply) => {
+      // Explicit auth — do not rely on global preHandler
+      let user;
+      try {
+        user = await AuthService.authenticateRequest(request);
+      } catch (err) {
+        return reply.status(401).send({ error: "Authentication required" });
+      }
+
+      const sessionToken = crypto.randomUUID().replaceAll("-", "");
+      const redis = redisClient.getClient();
+      await redis.set(`paymaster:session:${sessionToken}`, "1", "EX", 300);
+
+      return reply.send({ sessionToken });
     },
   });
 }
